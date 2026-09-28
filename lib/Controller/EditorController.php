@@ -168,7 +168,7 @@ class EditorController extends Controller {
 	 * fetch, nested pthread workers, wasm compile). Scripts carry COEP, which is
 	 * what lets them run as workers of an isolated page.
 	 *
-	 * @param array{bytes: int, gzBytes: int} $entry
+	 * @param array{bytes: int, sha256: string, gzBytes: int, gzSha256: string} $entry
 	 */
 	private function serve(string $path, array $entry): Response {
 		$extension = pathinfo($path, PATHINFO_EXTENSION);
@@ -179,7 +179,8 @@ class EditorController extends Controller {
 			default => 'application/octet-stream',
 		};
 		$packed = $this->packed($path);
-		if ($this->acceptsGzip()) {
+		$gzip = $this->acceptsGzip();
+		if ($gzip) {
 			$response = new StreamResponse($packed, Http::STATUS_OK, ['Content-Type' => $type,
 				'Content-Encoding' => 'gzip', 'Content-Length' => (string)$entry['gzBytes']]);
 		} else {
@@ -193,6 +194,11 @@ class EditorController extends Controller {
 		$response->addHeader('Vary', 'Accept-Encoding');
 		// The address carries the build id: these bytes never change under it.
 		$response->cacheFor(31536000, false, true);
+		// For a client that asks anyway: the worker fetches its manifest with
+		// cache: "no-cache" (sdk-worker.js), and Chrome sends that to the server
+		// every open. With an ETag, Nextcloud's NotModifiedMiddleware answers it
+		// 304 with no body. One per representation: the hash of the bytes sent.
+		$response->setETag($gzip ? $entry['gzSha256'] : $entry['sha256']);
 		$policy = new EmptyContentSecurityPolicy();
 		$policy->addAllowedScriptDomain('\'self\'');
 		$policy->addAllowedConnectDomain('\'self\'');
