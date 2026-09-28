@@ -1,14 +1,19 @@
 /*
  * The editor route's host script: the page's host entry, for Nextcloud
- * (study_LiteCore specs/SPEC-M3-host-entry.md). It puts `globalThis.liteCoreHost`
- * in place and only then imports the shipped editor module, which reads it once:
+ * (study_LiteCore specs/SPEC-M3-host-entry.md, and SPEC-M3-locks-and-permissions.md
+ * for the lock and the ways out). It puts `globalThis.liteCoreHost` in place and
+ * only then imports the shipped editor module, which reads it once:
  *
- *   load()  -- WebDAV GET of the user's file; the ETag is kept.
- *   save()  -- WebDAV PUT with If-Match on that ETag; never unconditional. A 412
- *              means the file changed since it was opened (or was moved away):
- *              nothing is overwritten, the bytes are saved next to it as a
- *              conflict copy, and the page is told both. On success the new ETag
- *              replaces the old one, so the next save chains on it.
+ *   load()  -- a WebDAV token LOCK first (300 s, refreshed every 60 s), then the
+ *              GET, so the ETag kept is the one after locking: taking a lock
+ *              moves the file's ETag, refreshing it does not.
+ *   save()  -- WebDAV PUT with If-Match on that ETag, never unconditional, plus
+ *              the lock token while one is held. A 412 while carrying the token
+ *              may only mean the lock died, so it is retried once without it.
+ *              Any other refusal, or no network: the bytes go next to the file
+ *              as a copy; if even that fails they stay here, behind a download
+ *              button, and leaving the page asks first.
+ *   pagehide -- UNLOCK, keepalive. A crashed tab's lock lapses by itself.
  *
  * No server-side document processing: the bytes go browser <-> WebDAV.
  * Everything observed is published on <html data-litecore> for a driver.
@@ -17,7 +22,13 @@
 	'use strict'
 
 	const ODT = 'application/vnd.oasis.opendocument.text'
-	const out = { started: Date.now(), done: false, steps: [], saves: [] }
+	const LOCK_SECONDS = 300
+	const REFRESH_MS = 60000
+	const LOCKINFO = '<?xml version="1.0" encoding="utf-8"?><d:lockinfo xmlns:d="DAV:">'
+		+ '<d:lockscope><d:exclusive/></d:lockscope><d:locktype><d:write/></d:locktype>'
+		+ '<d:owner>LiteCore</d:owner></d:lockinfo>'
+	const STRANDED = '存回失敗，而且沒有地方可以另存：內容還在這個頁面裡，請按「下載這份內容」。'
+	const out = { started: Date.now(), done: false, steps: [], saves: [], lock: { state: 'none' }, stranded: null, notice: '' }
 	const step = (name, detail) => { out.steps.push({ step: name, at: Date.now() - out.started, ...detail }); publish() }
 	const publish = () => document.documentElement.setAttribute('data-litecore', JSON.stringify(out))
 
@@ -57,13 +68,158 @@
 	// OC-ETag first: Nextcloud copies the ETag into it for setups whose proxy
 	// strips or rewrites ETag (apps/dav CopyEtagHeaderPlugin).
 	const versionOf = (response) => response.headers.get('oc-etag') || response.headers.get('etag')
-	const conflict = (message) => Object.assign(new Error(message), { code: 'CONFLICT' })
+	const failure = (code, message) => Object.assign(new Error(message), { code })
+	// A request that never got an answer has a status too: 'network'.
+	async function send(url, init) {
+		try {
+			return await fetch(url, { credentials: 'same-origin', ...init })
+		} catch (error) {
+			return { ok: false, status: 'network', error: String(error), headers: new Headers() }
+		}
+	}
 	let config = null
 	let etag = null
+	let token = null
+	let refreshTimer = null
+	let stranded = null
+	let lockNotice = ''
 
-	// The user's bytes never get stranded by a conflict: they go next to the
-	// file as a new one, which is created only if that name is free.
-	async function saveConflictCopy(bytes) {
+	// The host's own line above the product: what the lock or the permissions
+	// mean for saving, and -- while bytes have nowhere to go -- the way out.
+	function render() {
+		out.notice = stranded ? STRANDED : lockNotice
+		document.getElementById('litecore-host-notice').textContent = out.notice
+		document.getElementById('litecore-host-download').hidden = !stranded
+		document.getElementById('litecore-host-bar').hidden = !out.notice
+		publish()
+	}
+	const setLockNotice = (text) => { lockNotice = text; render() }
+
+	// -- the lock (spec §3 O2, K1, C1)
+	async function lockHolder() {
+		const response = await send(config.file.davUrl, {
+			method: 'PROPFIND',
+			body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:nc="http://nextcloud.org/ns"><d:prop>'
+				+ '<nc:lock-owner/><nc:lock-owner-displayname/><nc:lock-owner-type/></d:prop></d:propfind>',
+			headers: headers({ Depth: '0', 'Content-Type': 'application/xml; charset=utf-8' }),
+		})
+		if (!response.ok) return { status: response.status }
+		const xml = new DOMParser().parseFromString(await response.text(), 'application/xml')
+		const read = (name) => (xml.getElementsByTagNameNS('http://nextcloud.org/ns', name)[0] || {}).textContent || null
+		return { owner: read('lock-owner'), displayName: read('lock-owner-displayname'), type: read('lock-owner-type') }
+	}
+
+	async function takeLock() {
+		if (!config.file.writable) {
+			out.lock = { state: 'readonly' }
+			setLockNotice('唯讀：你沒有這個檔案的寫入權限，存檔會另存副本。')
+			return
+		}
+		const response = await send(config.file.davUrl, {
+			method: 'LOCK', body: LOCKINFO,
+			headers: headers({ 'Content-Type': 'application/xml; charset=utf-8', Timeout: `Second-${LOCK_SECONDS}` }),
+		})
+		out.lock = { state: 'failed', status: response.status, at: Date.now() - out.started, refreshes: [] }
+		if (response.status === 200 && response.headers.get('lock-token')) {
+			token = response.headers.get('lock-token')
+			out.lock.state = 'held'
+			refreshTimer = setInterval(refreshLock, REFRESH_MS)
+			publish()
+		} else if (response.status === 423) {
+			out.lock.state = 'refused'
+			out.lock.holder = await lockHolder()
+			const holder = out.lock.holder
+			setLockNotice(holder.owner && holder.owner === config.user
+				? '你在另一個視窗或裝置開著這個檔案：這裡的存檔會另存副本。'
+				: `正被 ${holder.displayName || holder.owner || '別人'} 鎖定編輯：你的存檔會另存副本。`)
+		} else {
+			setLockNotice(`無法上鎖（${response.status}）：存檔前仍會確認檔案沒被別人改過。`)
+		}
+	}
+
+	function loseLock(by, status) {
+		if (!token) return
+		token = null
+		clearInterval(refreshTimer)
+		Object.assign(out.lock, { state: 'lost', lostBy: by, lostStatus: status, lostAt: Date.now() - out.started })
+		setLockNotice('鎖已失效：別人現在可以寫這個檔案；存檔前仍會確認檔案沒被別人改過。')
+	}
+
+	async function refreshLock() {
+		if (!token) return
+		const response = await send(config.file.davUrl, {
+			method: 'LOCK', headers: headers({ If: `(${token})`, Timeout: `Second-${LOCK_SECONDS}` }),
+		})
+		out.lock.refreshes.push({ at: Date.now() - out.started, status: response.status })
+		// No answer is not a refusal: the lock may well still be there, and a
+		// dead token is caught by the next save anyway (saveOnce's retry).
+		if (response.status !== 200 && response.status !== 'network') loseLock('refresh', response.status)
+		publish()
+	}
+
+	window.addEventListener('pagehide', () => {
+		clearInterval(refreshTimer)
+		if (!token) return
+		const held = token
+		token = null
+		out.lock.state = 'released'
+		publish()
+		// Twice, on purpose. Measured in Chrome 151 on this route, navigating away
+		// (study_LiteCore findings/evidence/m3-locks/unload/README.md): a single
+		// keepalive UNLOCK here reached the server 0 times in 4, two of them 4 in 4.
+		// Why is not known. Firefox 156 delivered the single one 4 in 4. The
+		// second, if the first got through, is answered 412 and changes nothing.
+		for (let copy = 0; copy < 2; copy++) {
+			fetch(config.file.davUrl, {
+				method: 'UNLOCK', keepalive: true, credentials: 'same-origin', headers: headers({ 'Lock-Token': held }),
+			}).catch(() => {})
+		}
+	})
+
+	// -- the way out (spec §3 S4-S6)
+	window.addEventListener('beforeunload', (event) => {
+		if (!stranded) return
+		out.guarded = (out.guarded || 0) + 1
+		publish()
+		event.preventDefault()
+		event.returnValue = ''
+	})
+
+	function strand(bytes, sha256) {
+		stranded = { bytes, sha256 }
+		out.stranded = { sha256, bytes: bytes.byteLength, at: Date.now() - out.started }
+		render()
+	}
+
+	// Each save carries the whole document, so any later save that lands
+	// somewhere supersedes bytes kept from an earlier one.
+	function unstrand(how) {
+		if (!stranded) return
+		out.unstranded = { how, sha256: stranded.sha256, at: Date.now() - out.started }
+		stranded = null
+		out.stranded = null
+		render()
+	}
+
+	// Only from the button: a download needs the user's gesture (spec §3 S6).
+	function download() {
+		if (!stranded) return
+		const url = URL.createObjectURL(new Blob([stranded.bytes], { type: ODT }))
+		const link = document.createElement('a')
+		link.href = url
+		link.download = config.file.name
+		document.body.appendChild(link)
+		link.click()
+		link.remove()
+		// Firefox reads the blob after click() returns; revoking at once can
+		// cancel the download.
+		setTimeout(() => URL.revokeObjectURL(url), 60000)
+		out.downloaded = { sha256: stranded.sha256, at: Date.now() - out.started }
+		unstrand('download')
+	}
+
+	// The copy is created only if that name is free (If-None-Match: *).
+	async function saveCopy(bytes, label) {
 		const slash = config.file.davUrl.lastIndexOf('/')
 		const folder = config.file.davUrl.slice(0, slash + 1)
 		const stem = config.file.name.replace(/\.odt$/i, '')
@@ -71,10 +227,9 @@
 		const pad = (n) => String(n).padStart(2, '0')
 		const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
 		for (let attempt = 1; attempt <= 5; attempt++) {
-			const name = `${stem}（衝突副本 ${stamp}${attempt > 1 ? `-${attempt}` : ''}）.odt`
-			const response = await fetch(folder + encodeURIComponent(name), {
-				method: 'PUT', credentials: 'same-origin', body: bytes,
-				headers: headers({ 'Content-Type': ODT, 'If-None-Match': '*' }),
+			const name = `${stem}（${label} ${stamp}${attempt > 1 ? `-${attempt}` : ''}）.odt`
+			const response = await send(folder + encodeURIComponent(name), {
+				method: 'PUT', body: bytes, headers: headers({ 'Content-Type': ODT, 'If-None-Match': '*' }),
 			})
 			if (response.ok) return { name, status: response.status }
 			if (response.status !== 412) return { name, status: response.status, failed: true }
@@ -85,6 +240,7 @@
 	// Put in place by run(), before the product module is imported.
 	const host = {
 		async load() {
+			await takeLock()
 			const response = await fetch(config.file.davUrl, {
 				credentials: 'same-origin', cache: 'no-store', headers: headers(),
 			})
@@ -92,63 +248,90 @@
 			etag = versionOf(response)
 			out.fetched = {
 				status: response.status, contentType: response.headers.get('content-type'),
-				etag, bytes: bytes.byteLength, sha256: await hex(bytes),
+				etag, bytes: bytes.byteLength, sha256: await hex(bytes), at: Date.now() - out.started,
 			}
 			step('fetched')
-			if (!response.ok) throw Object.assign(new Error(`WebDAV GET ${response.status}`), { code: 'HOST_LOAD_FAILED' })
+			if (!response.ok) throw failure('HOST_LOAD_FAILED', `WebDAV GET ${response.status}`)
 			// Without a version there is no conditional write, and an unconditional
 			// one overwrites whatever changed since. Refuse rather than fail open.
-			if (!etag) throw Object.assign(new Error('伺服器沒有給這個檔案的版本標記，無法安全存回。'), { code: 'HOST_LOAD_FAILED' })
+			if (!etag) throw failure('HOST_LOAD_FAILED', '伺服器沒有給這個檔案的版本標記，無法安全存回。')
 			return { bytes, name: config.file.name }
 		},
 
 		async save(bytes, { name }) {
-			const record = { at: Date.now() - out.started, name, bytes: bytes.byteLength }
+			const record = { at: Date.now() - out.started, name, bytes: bytes.byteLength, attempts: [] }
 			out.saves.push(record)
 			try {
 				await saveOnce(bytes, record)
 			} finally {
-				// Everything this save will do is done, conflict copy included.
+				// Everything this save will do is done, copy included.
 				record.settled = true
 				publish()
 			}
 		},
 	}
 
+	async function put(bytes, record) {
+		const attempt = { ifMatch: etag, withToken: token !== null, at: Date.now() - out.started }
+		record.attempts.push(attempt)
+		const extra = { 'Content-Type': ODT, 'If-Match': etag }
+		if (token) extra.If = `(${token})`
+		const response = await send(config.file.davUrl, { method: 'PUT', body: bytes, headers: headers(extra) })
+		attempt.status = response.status
+		if (response.error) attempt.error = response.error
+		publish()
+		return response
+	}
+
 	async function saveOnce(bytes, record) {
 		record.sha256 = await hex(bytes)
-		if (!etag) throw Object.assign(new Error('不知道伺服器上的版本，不做無條件覆寫。'), { code: 'HOST_SAVE_FAILED' })
+		if (!etag) throw failure('HOST_SAVE_FAILED', '不知道伺服器上的版本，不做無條件覆寫。')
 		record.ifMatch = etag
-		const response = await fetch(config.file.davUrl, {
-			method: 'PUT', credentials: 'same-origin', body: bytes,
-			headers: headers({ 'Content-Type': ODT, 'If-Match': etag }),
-		})
+		let response = await put(bytes, record)
+		// A token that died (expired, or removed from Files) fails the PUT with
+		// 412 even when nothing changed. If-Match alone still refuses a real change.
+		if (response.status === 412 && record.attempts[0].withToken) {
+			loseLock('save', 412)
+			response = await put(bytes, record)
+		}
 		record.status = response.status
-		publish()
-		if (response.status === 412) {
-			record.responseEtag = versionOf(response)
-			record.conflictCopy = await saveConflictCopy(bytes)
-			publish()
-			if (record.conflictCopy.failed) {
-				throw conflict(`檔案在你開啟之後已被別處修改或移走，沒有覆寫；另存副本也失敗（HTTP ${record.conflictCopy.status}）。`)
+		if (response.ok) {
+			record.etag = versionOf(response)
+			if (!record.etag) {
+				// Without the new version the next save would be refused as a conflict.
+				const head = await send(config.file.davUrl, { method: 'HEAD', headers: headers() })
+				record.etag = versionOf(head)
+				record.etagFrom = 'HEAD'
 			}
-			throw conflict(`檔案在你開啟之後已被別處修改或移走，沒有覆寫。你的內容另存為「${record.conflictCopy.name}」。`)
+			etag = record.etag
+			unstrand('saved')
+			return
 		}
-		if (!response.ok) throw Object.assign(new Error(`WebDAV PUT ${response.status}`), { code: 'HOST_SAVE_FAILED' })
-		record.etag = versionOf(response)
-		if (!record.etag) {
-			// Without the new version the next save would be refused as a conflict.
-			const head = await fetch(config.file.davUrl, { method: 'HEAD', credentials: 'same-origin', headers: headers() })
-			record.etag = versionOf(head)
-			record.etagFrom = 'HEAD'
+		const conflict = response.status === 412 || response.status === 423
+		const why = {
+			412: '檔案在你開啟之後已被別處修改或移走，沒有覆寫。',
+			423: '檔案正被別人鎖定，沒有覆寫。',
+			403: '你沒有這個檔案的寫入權限。',
+			507: '儲存空間已滿。',
+			network: '連不上伺服器。',
+		}[response.status] || `伺服器拒絕寫入（HTTP ${response.status}）。`
+		record.responseEtag = versionOf(response)
+		record.conflictCopy = await saveCopy(bytes, conflict ? '衝突副本' : '另存副本')
+		publish()
+		const code = conflict ? 'CONFLICT' : 'HOST_SAVE_FAILED'
+		if (!record.conflictCopy.failed) {
+			unstrand('copy')
+			throw failure(code, `${why}你的內容另存為「${record.conflictCopy.name}」。`)
 		}
-		etag = record.etag
+		strand(bytes, record.sha256)
+		throw failure(code, `${why}另存副本也失敗（${record.conflictCopy.status}）：內容還在這個頁面裡，請按「下載這份內容」。`)
 	}
 
 	async function run() {
 		config = readConfig()
 		globalThis.liteCoreHost = host
-		out.file = { id: config.file.id, name: config.file.name, size: config.file.size, etag: config.file.etag }
+		document.getElementById('litecore-host-download').addEventListener('click', download)
+		out.file = { id: config.file.id, name: config.file.name, size: config.file.size, etag: config.file.etag, writable: config.file.writable }
 		out.isolation = {
 			crossOriginIsolated: self.crossOriginIsolated === true,
 			sharedArrayBuffer: typeof SharedArrayBuffer === 'function',

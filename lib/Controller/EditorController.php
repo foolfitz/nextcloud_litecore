@@ -96,6 +96,7 @@ class EditorController extends Controller {
 			return new DataDisplayResponse('the shipped page no longer has the shape this app re-wraps', Http::STATUS_INTERNAL_SERVER_ERROR);
 		}
 		$this->initialState->provideInitialState('config', [
+			'user' => $this->userSession->getUser()?->getUID(),
 			'file' => $target,
 			'editor' => ['module' => './e2-editor-app.js', 'sourceSha256' => hash('sha256', $html)],
 		]);
@@ -116,7 +117,10 @@ class EditorController extends Controller {
 	 * The file as the current user sees it, or why not. Only the user's own
 	 * folder: shares received are in it, public links are not (out of scope).
 	 *
-	 * @return array{id: int, name: string, size: int, etag: string, davUrl: string}|string
+	 * `writable` decides whether the host takes a lock at all: a read-only share
+	 * answers every PUT with 403, so there is nothing a lock would protect.
+	 *
+	 * @return array{id: int, name: string, size: int, etag: string, writable: bool, davUrl: string}|string
 	 */
 	private function resolve(int $fileId): array|string {
 		$user = $this->userSession->getUser();
@@ -138,6 +142,7 @@ class EditorController extends Controller {
 			'name' => $node->getName(),
 			'size' => $node->getSize(),
 			'etag' => $node->getEtag(),
+			'writable' => $node->isUpdateable(),
 			'davUrl' => $this->urls->linkTo('', 'remote.php') . '/dav/files/'
 				. rawurlencode($user->getUID()) . '/' . implode('/', $segments),
 		];
