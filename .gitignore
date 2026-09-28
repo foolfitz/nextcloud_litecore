@@ -3,6 +3,7 @@
 # never committed.
 /engine/
 /engine.new/
+/engine.old/
 /node_modules/
 
 # BEGIN ddev-nextcloud-app

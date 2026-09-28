@@ -236,7 +236,10 @@
 		// out to be a download, say). The lock is gone, and releasing it moved the
 		// ETag, so the next save goes to a copy; say so rather than pretend.
 		setTimeout(() => {
-			if (out.lock.state !== 'released' || document.visibilityState === 'hidden') return
+			// Also while hidden: a tab switched away from after a cancelled navigation
+			// is still a page holding no lock. (A navigation slower than 3 s shows
+			// this too, just before the page goes.)
+			if (out.lock.state !== 'released') return
 			Object.assign(out.lock, { state: 'lost', lostBy: 'stayed-after-beforeunload', lostAt: Date.now() - out.started })
 			setLockNotice('鎖已釋放：別人現在可以寫這個檔案；存檔前仍會確認檔案沒被別人改過。')
 		}, 3000)
