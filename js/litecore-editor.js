@@ -16,7 +16,9 @@
  *              Any other refusal, or no network: the bytes go next to the file
  *              as a copy; if even that fails they stay here, behind a download
  *              button, and leaving the page asks first.
- *   pagehide -- UNLOCK, keepalive. A crashed tab's lock lapses by itself.
+ *   leaving  -- UNLOCK, keepalive, at beforeunload (unless leaving is being
+ *              asked about) and again at pagehide. A crashed tab's lock
+ *              lapses by itself.
  *
  * No server-side document processing: the bytes go browser <-> WebDAV.
  * Everything observed is published on <html data-litecore> for a driver.
@@ -192,34 +194,54 @@
 		publish()
 	}
 
-	window.addEventListener('pagehide', () => {
+	// -- leaving (spec §3 of SPEC-M3-locks-and-permissions; study_LiteCore finding 105)
+	// Sent at beforeunload, and again at pagehide. Firefox 156 with its HTTP
+	// cache on let the pagehide UNLOCK reach the server 6 times in 13 (the
+	// page's pagehide ran every time): the next open of the same file then got
+	// 423 and saved to copies for five minutes. beforeunload runs before the
+	// navigation starts. Twice each time, on purpose: in Chrome 151 a single
+	// keepalive UNLOCK at pagehide reached the server 0 times in 4, two of them
+	// 4 in 4 (study_LiteCore findings/evidence/m3-locks/unload/README.md). A
+	// copy that finds no lock is answered 204 or 500 and releases nothing else
+	// (Sabre compares tokens).
+	let released = null
+	function release(by) {
 		clearInterval(refreshTimer)
-		if (!token) return
-		const held = token
-		token = null
-		out.lock.state = 'released'
-		publish()
-		// Twice, on purpose. Measured in Chrome 151 on this route, navigating away
-		// (study_LiteCore findings/evidence/m3-locks/unload/README.md): a single
-		// keepalive UNLOCK here reached the server 0 times in 4, two of them 4 in 4.
-		// Why is not known. Firefox 156 delivered the single one 4 in 4. A second
-		// one that finds no lock is answered 204 or 500 and releases nothing else
-		// (Sabre compares tokens).
+		if (token) {
+			released = token
+			token = null
+			out.lock.state = 'released'
+			out.lock.releasedBy = by
+			publish()
+		}
+		if (!released) return
 		for (let copy = 0; copy < 2; copy++) {
 			fetch(config.file.davUrl, {
-				method: 'UNLOCK', keepalive: true, credentials: 'same-origin', headers: headers({ 'Lock-Token': held }),
+				method: 'UNLOCK', keepalive: true, credentials: 'same-origin', headers: headers({ 'Lock-Token': released }),
 			}).catch(() => {})
 		}
-	})
+	}
 
-	// -- the way out (spec §3 S4-S6)
 	window.addEventListener('beforeunload', (event) => {
-		if (!stranded && inFlight === 0) return
-		out.guarded = (out.guarded || 0) + 1
-		publish()
-		event.preventDefault()
-		event.returnValue = ''
+		// -- the way out (spec §3 S4-S6): asked about, so the page may stay; keep the lock
+		if (stranded || inFlight > 0) {
+			out.guarded = (out.guarded || 0) + 1
+			publish()
+			event.preventDefault()
+			event.returnValue = ''
+			return
+		}
+		release('beforeunload')
+		// Still here a moment later: nothing unloaded the page (a link that turned
+		// out to be a download, say). The lock is gone, and releasing it moved the
+		// ETag, so the next save goes to a copy; say so rather than pretend.
+		setTimeout(() => {
+			if (out.lock.state !== 'released' || document.visibilityState === 'hidden') return
+			Object.assign(out.lock, { state: 'lost', lostBy: 'stayed-after-beforeunload', lostAt: Date.now() - out.started })
+			setLockNotice('鎖已釋放：別人現在可以寫這個檔案；存檔前仍會確認檔案沒被別人改過。')
+		}, 3000)
 	})
+	window.addEventListener('pagehide', () => release('pagehide'))
 
 	function strand(bytes, sha256) {
 		stranded = { bytes, sha256 }
