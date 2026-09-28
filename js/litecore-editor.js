@@ -6,10 +6,13 @@
  *
  *   load()  -- a WebDAV token LOCK first (300 s, refreshed every 60 s), then the
  *              GET, so the ETag kept is the one after locking: taking a lock
- *              moves the file's ETag, refreshing it does not.
+ *              moves the file's ETag, refreshing it does not. A refresh asks
+ *              for elapsed + 300 s, because files_lock counts the timeout from
+ *              when the lock was taken, not from the refresh (finding 101).
  *   save()  -- WebDAV PUT with If-Match on that ETag, never unconditional, plus
  *              the lock token while one is held. A 412 while carrying the token
- *              may only mean the lock died, so it is retried once without it.
+ *              may only mean the lock died; if the token is gone from the
+ *              server, it is retried once without it.
  *              Any other refusal, or no network: the bytes go next to the file
  *              as a copy; if even that fails they stay here, behind a download
  *              button, and leaving the page asks first.
@@ -24,10 +27,12 @@
 	const ODT = 'application/vnd.oasis.opendocument.text'
 	const LOCK_SECONDS = 300
 	const REFRESH_MS = 60000
-	const LOCKINFO = '<?xml version="1.0" encoding="utf-8"?><d:lockinfo xmlns:d="DAV:">'
-		+ '<d:lockscope><d:exclusive/></d:lockscope><d:locktype><d:write/></d:locktype>'
-		+ '<d:owner>LiteCore</d:owner></d:lockinfo>'
+	// Only these say the lock is gone or someone else has it; anything else
+	// (5xx, 401, 429, no answer) leaves a live lock alone.
+	const LOST = [400, 404, 409, 412, 423]
+	const xml = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 	const STRANDED = '存回失敗，而且沒有地方可以另存：內容還在這個頁面裡，請按「下載這份內容」。'
+	const DOWNLOADED = '已交給瀏覽器下載。請確認檔案真的存好了；在下一次存回成功之前，離開這頁都會先問你。'
 	const out = { started: Date.now(), done: false, steps: [], saves: [], lock: { state: 'none' }, stranded: null, notice: '' }
 	const step = (name, detail) => { out.steps.push({ step: name, at: Date.now() - out.started, ...detail }); publish() }
 	const publish = () => document.documentElement.setAttribute('data-litecore', JSON.stringify(out))
@@ -83,13 +88,17 @@
 	let refreshTimer = null
 	let stranded = null
 	let lockNotice = ''
+	let lockedAt = 0
+	let inFlight = 0
 
 	// The host's own line above the product: what the lock or the permissions
 	// mean for saving, and -- while bytes have nowhere to go -- the way out.
 	function render() {
-		out.notice = stranded ? STRANDED : lockNotice
+		out.notice = stranded ? (stranded.downloaded ? DOWNLOADED : STRANDED) : lockNotice
 		document.getElementById('litecore-host-notice').textContent = out.notice
-		document.getElementById('litecore-host-download').hidden = !stranded
+		const button = document.getElementById('litecore-host-download')
+		button.hidden = !stranded
+		button.textContent = stranded && stranded.downloaded ? '再下載一次' : '下載這份內容'
 		document.getElementById('litecore-host-bar').hidden = !out.notice
 		publish()
 	}
@@ -109,21 +118,46 @@
 		return { owner: read('lock-owner'), displayName: read('lock-owner-displayname'), type: read('lock-owner-type') }
 	}
 
+	// true / false, or null when the server did not say.
+	async function tokenOnServer(held) {
+		const response = await send(config.file.davUrl, {
+			method: 'PROPFIND',
+			body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:lockdiscovery/></d:prop></d:propfind>',
+			headers: headers({ Depth: '0', 'Content-Type': 'application/xml; charset=utf-8' }),
+		})
+		if (!response.ok) return null
+		return (await response.text()).includes(held.replace(/^<|>$/g, ''))
+	}
+
 	async function takeLock() {
 		if (!config.file.writable) {
 			out.lock = { state: 'readonly' }
 			setLockNotice('唯讀：你沒有這個檔案的寫入權限，存檔會另存副本。')
 			return
 		}
+		// The owner text is what others see as the holder (files_lock shows it
+		// for token locks), so it is the user's name, not the app's.
+		const lockinfo = '<?xml version="1.0" encoding="utf-8"?><d:lockinfo xmlns:d="DAV:">'
+			+ '<d:lockscope><d:exclusive/></d:lockscope><d:locktype><d:write/></d:locktype>'
+			+ `<d:owner>${xml(config.userDisplayName || config.user || 'LiteCore')}</d:owner></d:lockinfo>`
+		lockedAt = Date.now()
 		const response = await send(config.file.davUrl, {
-			method: 'LOCK', body: LOCKINFO,
+			method: 'LOCK', body: lockinfo,
 			headers: headers({ 'Content-Type': 'application/xml; charset=utf-8', Timeout: `Second-${LOCK_SECONDS}` }),
 		})
 		out.lock = { state: 'failed', status: response.status, at: Date.now() - out.started, refreshes: [] }
 		if (response.status === 200 && response.headers.get('lock-token')) {
-			token = response.headers.get('lock-token')
-			out.lock.state = 'held'
-			refreshTimer = setInterval(refreshLock, REFRESH_MS)
+			// A 200 can carry a token that was never stored (the user already
+			// holds a user lock of their own); only one the server lists counts.
+			const held = response.headers.get('lock-token')
+			out.lock.verified = await tokenOnServer(held)
+			if (out.lock.verified === false) {
+				out.lock.state = 'not-stored'
+			} else {
+				token = held
+				out.lock.state = 'held'
+				refreshTimer = setInterval(refreshLock, REFRESH_MS)
+			}
 			publish()
 		} else if (response.status === 423) {
 			out.lock.state = 'refused'
@@ -147,13 +181,14 @@
 
 	async function refreshLock() {
 		if (!token) return
+		const seconds = Math.ceil((Date.now() - lockedAt) / 1000) + LOCK_SECONDS
 		const response = await send(config.file.davUrl, {
-			method: 'LOCK', headers: headers({ If: `(${token})`, Timeout: `Second-${LOCK_SECONDS}` }),
+			method: 'LOCK', headers: headers({ If: `(${token})`, Timeout: `Second-${seconds}` }),
 		})
-		out.lock.refreshes.push({ at: Date.now() - out.started, status: response.status })
-		// No answer is not a refusal: the lock may well still be there, and a
-		// dead token is caught by the next save anyway (saveOnce's retry).
-		if (response.status !== 200 && response.status !== 'network') loseLock('refresh', response.status)
+		out.lock.refreshes.push({ at: Date.now() - out.started, status: response.status, seconds })
+		// No answer, or a server error, is not a refusal: the lock may well
+		// still be there, and a dead token is caught by the next save anyway.
+		if (LOST.includes(response.status)) loseLock('refresh', response.status)
 		publish()
 	}
 
@@ -167,8 +202,9 @@
 		// Twice, on purpose. Measured in Chrome 151 on this route, navigating away
 		// (study_LiteCore findings/evidence/m3-locks/unload/README.md): a single
 		// keepalive UNLOCK here reached the server 0 times in 4, two of them 4 in 4.
-		// Why is not known. Firefox 156 delivered the single one 4 in 4. The
-		// second, if the first got through, is answered 412 and changes nothing.
+		// Why is not known. Firefox 156 delivered the single one 4 in 4. A second
+		// one that finds no lock is answered 204 or 500 and releases nothing else
+		// (Sabre compares tokens).
 		for (let copy = 0; copy < 2; copy++) {
 			fetch(config.file.davUrl, {
 				method: 'UNLOCK', keepalive: true, credentials: 'same-origin', headers: headers({ 'Lock-Token': held }),
@@ -178,7 +214,7 @@
 
 	// -- the way out (spec §3 S4-S6)
 	window.addEventListener('beforeunload', (event) => {
-		if (!stranded) return
+		if (!stranded && inFlight === 0) return
 		out.guarded = (out.guarded || 0) + 1
 		publish()
 		event.preventDefault()
@@ -192,7 +228,8 @@
 	}
 
 	// Each save carries the whole document, so any later save that lands
-	// somewhere supersedes bytes kept from an earlier one.
+	// somewhere supersedes bytes kept from an earlier one. Nothing else does:
+	// not even a download, whose completion the page cannot see.
 	function unstrand(how) {
 		if (!stranded) return
 		out.unstranded = { how, sha256: stranded.sha256, at: Date.now() - out.started }
@@ -202,6 +239,7 @@
 	}
 
 	// Only from the button: a download needs the user's gesture (spec §3 S6).
+	// The bytes and the guard stay: a cancelled "Save as" must not lose them.
 	function download() {
 		if (!stranded) return
 		const url = URL.createObjectURL(new Blob([stranded.bytes], { type: ODT }))
@@ -214,8 +252,10 @@
 		// Firefox reads the blob after click() returns; revoking at once can
 		// cancel the download.
 		setTimeout(() => URL.revokeObjectURL(url), 60000)
-		out.downloaded = { sha256: stranded.sha256, at: Date.now() - out.started }
-		unstrand('download')
+		stranded.downloaded = true
+		out.downloaded = (out.downloaded || []).concat({ sha256: stranded.sha256, at: Date.now() - out.started })
+		out.stranded.downloaded = true
+		render()
 	}
 
 	// The copy is created only if that name is free (If-None-Match: *).
@@ -261,10 +301,12 @@
 		async save(bytes, { name }) {
 			const record = { at: Date.now() - out.started, name, bytes: bytes.byteLength, attempts: [] }
 			out.saves.push(record)
+			inFlight++
 			try {
 				await saveOnce(bytes, record)
 			} finally {
 				// Everything this save will do is done, copy included.
+				inFlight--
 				record.settled = true
 				publish()
 			}
@@ -285,14 +327,22 @@
 
 	async function saveOnce(bytes, record) {
 		record.sha256 = await hex(bytes)
-		if (!etag) throw failure('HOST_SAVE_FAILED', '不知道伺服器上的版本，不做無條件覆寫。')
-		record.ifMatch = etag
-		let response = await put(bytes, record)
-		// A token that died (expired, or removed from Files) fails the PUT with
-		// 412 even when nothing changed. If-Match alone still refuses a real change.
-		if (response.status === 412 && record.attempts[0].withToken) {
-			loseLock('save', 412)
+		let response = { ok: false, status: 'no-version', headers: new Headers() }
+		// Without a version there is no conditional write; the bytes still get
+		// the way out below, just never an unconditional overwrite.
+		if (etag) {
+			record.ifMatch = etag
 			response = await put(bytes, record)
+		}
+		// A token that died (expired, or removed from Files) fails the PUT with
+		// 412 even when nothing changed. But a live lock can meet a 412 too:
+		// someone's refused unlock still moves the ETag. So ask the server.
+		if (response.status === 412 && record.attempts[0].withToken) {
+			record.tokenOnServer = await tokenOnServer(token)
+			if (record.tokenOnServer === false) {
+				loseLock('save', 412)
+				response = await put(bytes, record)
+			}
 		}
 		record.status = response.status
 		if (response.ok) {
@@ -314,6 +364,7 @@
 			403: '你沒有這個檔案的寫入權限。',
 			507: '儲存空間已滿。',
 			network: '連不上伺服器。',
+			'no-version': '不知道伺服器上的版本，不做無條件覆寫。',
 		}[response.status] || `伺服器拒絕寫入（HTTP ${response.status}）。`
 		record.responseEtag = versionOf(response)
 		record.conflictCopy = await saveCopy(bytes, conflict ? '衝突副本' : '另存副本')

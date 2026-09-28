@@ -97,6 +97,7 @@ class EditorController extends Controller {
 		}
 		$this->initialState->provideInitialState('config', [
 			'user' => $this->userSession->getUser()?->getUID(),
+			'userDisplayName' => $this->userSession->getUser()?->getDisplayName(),
 			'file' => $target,
 			'editor' => ['module' => './e2-editor-app.js', 'sourceSha256' => hash('sha256', $html)],
 		]);
