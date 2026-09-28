@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	  xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+	<id>litecore</id>
+	<name>LiteCore</name>
+	<summary>Open ODT files from Files in the LiteCore WebAssembly editor. M3 skeleton.</summary>
+	<description><![CDATA[M3 skeleton of study_LiteCore's Nextcloud app. The editor runs entirely in
+the browser (LibreOffice core compiled to WebAssembly); the server only serves
+files. Shape = M3 gate 0's E1h: a dedicated route under Nextcloud's header,
+cross-origin isolated, every engine script served with COEP by PHP.]]></description>
+	<version>0.1.0</version>
+	<licence>agpl</licence>
+	<author>study_LiteCore</author>
+	<namespace>LiteCore</namespace>
+	<category>office</category>
+	<bugs>https://invalid.example/</bugs>
+	<dependencies>
+		<nextcloud min-version="33" max-version="34"/>
+	</dependencies>
+</info>

@@ -1,0 +1,8 @@
+# dist is a symlink to the read-only mount of study_LiteCore's wasm_sdk_probe/dist
+# inside the web container (.ddev/docker-compose.litecore-dist.yaml); it is tracked
+# as a symlink, never as content.
+/node_modules/
+
+# BEGIN ddev-nextcloud-app
+/nextcloud/
+# END ddev-nextcloud-app

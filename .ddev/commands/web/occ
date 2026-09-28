@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+#ddev-generated
+## Description: Run the Nextcloud occ command
+## Usage: occ [command] [options]
+## Example: ddev occ status
+## ExecRaw: true
+
+set -eu -o pipefail
+
+COMMAND_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../nextcloud-app/lib.sh
+source "${COMMAND_DIR}/../../nextcloud-app/lib.sh"
+
+nc_require_core
+cd "${NC_CORE_ROOT}"
+exec php occ "$@"

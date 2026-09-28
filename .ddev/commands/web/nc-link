@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+#ddev-generated
+## Description: Link the app repository into Nextcloud apps-extra
+## Usage: nc-link
+## Example: ddev nc-link
+## ExecRaw: true
+
+set -eu -o pipefail
+
+COMMAND_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../nextcloud-app/lib.sh
+source "${COMMAND_DIR}/../../nextcloud-app/lib.sh"
+
+nc_link_app

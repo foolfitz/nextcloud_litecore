@@ -1,0 +1,21 @@
+#ddev-generated
+## Configuration provided by ddev-nextcloud-app.
+
+disable_upload_dirs_warning: true
+webimage_extra_packages:
+  - php${DDEV_PHP_VERSION}-gmp
+
+web_environment:
+  # 釘 tag 而非分支：研究專案的證據必須可重現。分支會移動，且移動時不會有任何
+  # 訊號——同一份設定三個月後重跑可能得到不同結果卻無從察覺。
+  # v33.0.8 = commit 1eb01d37e6f，與 spec/ 的查證基準同一個 commit。
+  - NEXTCLOUD_VERSION=v33.0.8
+  - NEXTCLOUD_CORE_REPOSITORY=https://github.com/nextcloud/server.git
+  - NEXTCLOUD_ADMIN_USER=admin
+
+hooks:
+  post-start:
+    - exec: |
+        if [ -f "/var/www/html/${DDEV_DOCROOT}/version.php" ]; then
+          /var/www/html/.ddev/commands/web/nc-link
+        fi

@@ -1,0 +1,35 @@
+name: ddev-nextcloud-app
+repository: /home/jiajun/Projects/ddev-nextcloud-app
+version: ""
+install_date: "2026-09-28T15:40:44+08:00"
+project_files:
+    - commands/web/cron
+    - commands/web/nc-app-exec
+    - commands/web/nc-link
+    - commands/web/nc-setup
+    - commands/web/occ
+    - config.nextcloud-app.yaml
+    - nextcloud-app/ddev.config.php
+    - nextcloud-app/lib.sh
+global_files: []
+removal_actions:
+    - |
+      #ddev-description: Remove the generated Git ignore block
+      gitignore="${DDEV_APPROOT}/.gitignore"
+      if [ -f "${gitignore}" ]; then
+        if grep -Fqx "# BEGIN ddev-nextcloud-app" "${gitignore}" \
+          && grep -Fqx "# END ddev-nextcloud-app" "${gitignore}"; then
+          temporary="${gitignore}.ddev-nextcloud-app.tmp"
+          awk '
+            $0 == "# BEGIN ddev-nextcloud-app" { skipping = 1; next }
+            $0 == "# END ddev-nextcloud-app" { skipping = 0; next }
+            !skipping { print }
+          ' "${gitignore}" > "${temporary}"
+          mv "${temporary}" "${gitignore}"
+        elif grep -Fq "ddev-nextcloud-app" "${gitignore}"; then
+          echo "略過已被修改的 ddev-nextcloud-app Git ignore 區塊。"
+        fi
+      fi
+      if [ -d "${DDEV_APPROOT}/nextcloud" ]; then
+        echo "保留 ${DDEV_APPROOT}/nextcloud；確認不再需要後可由使用者自行移除。"
+      fi

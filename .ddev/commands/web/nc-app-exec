@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+#ddev-generated
+## Description: Run a command from the installed Nextcloud app path
+## Usage: nc-app-exec <command> [arguments]
+## Example: ddev nc-app-exec vendor/bin/phpunit -c phpunit.xml
+## ExecRaw: true
+
+set -eu -o pipefail
+
+COMMAND_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../nextcloud-app/lib.sh
+source "${COMMAND_DIR}/../../nextcloud-app/lib.sh"
+
+if [ "$#" -eq 0 ]; then
+  nc_fail "請提供要執行的指令，例如：ddev nc-app-exec vendor/bin/phpunit"
+  exit 1
+fi
+
+nc_link_app
+APP_ID="$(nc_app_id)"
+cd "${NC_CORE_ROOT}/apps-extra/${APP_ID}"
+exec "$@"

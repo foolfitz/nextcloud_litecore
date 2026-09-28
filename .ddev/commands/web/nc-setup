@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+
+#ddev-generated
+## Description: Create or update the Nextcloud core development environment
+## Usage: nc-setup [core-ref]
+## Example: ddev nc-setup or ddev nc-setup v33.0.8
+## ExecRaw: true
+
+set -eu -o pipefail
+
+COMMAND_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../nextcloud-app/lib.sh
+source "${COMMAND_DIR}/../../nextcloud-app/lib.sh"
+
+REQUESTED_REF="${1:-}"
+CORE_REF="${REQUESTED_REF:-${NEXTCLOUD_VERSION:-v33.0.8}}"
+CORE_REPOSITORY="${NEXTCLOUD_CORE_REPOSITORY:-https://github.com/nextcloud/server.git}"
+ADMIN_USER="${NEXTCLOUD_ADMIN_USER:-admin}"
+CORE_CREATED=false
+CORE_UPDATED=false
+
+if [ ! -f "${NC_CORE_ROOT}/version.php" ]; then
+  if [ -d "${NC_CORE_ROOT}" ] && [ -n "$(find "${NC_CORE_ROOT}" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    nc_fail "${NC_CORE_ROOT} 不是空目錄，也不是 Nextcloud core；不會覆寫。"
+    exit 1
+  fi
+
+  printf '正在取得 Nextcloud core（%s）…\n' "${CORE_REF}"
+  git clone \
+    --branch "${CORE_REF}" \
+    --depth 1 \
+    --recurse-submodules \
+    --shallow-submodules \
+    "${CORE_REPOSITORY}" \
+    "${NC_CORE_ROOT}"
+  CORE_CREATED=true
+elif [ -n "${REQUESTED_REF}" ]; then
+  if [ ! -d "${NC_CORE_ROOT}/.git" ]; then
+    nc_fail "既有 core 不是 Git worktree，無法切換到 ${REQUESTED_REF}。"
+    exit 1
+  fi
+
+  CORE_STATUS="$(
+    git -C "${NC_CORE_ROOT}" status --porcelain --untracked-files=no \
+      | sed '/^ M \.htaccess$/d'
+  )"
+
+  if [ -n "${CORE_STATUS}" ]; then
+    nc_fail "Nextcloud core 有尚未提交的追蹤中修改；不會切換版本。"
+    exit 1
+  fi
+
+  git -C "${NC_CORE_ROOT}" checkout -- .htaccess
+  printf '正在切換 Nextcloud core 到 %s…\n' "${REQUESTED_REF}"
+  git -C "${NC_CORE_ROOT}" fetch --depth 1 origin "${REQUESTED_REF}"
+  git -C "${NC_CORE_ROOT}" checkout --detach FETCH_HEAD
+  CORE_UPDATED=true
+fi
+
+if [ -d "${NC_CORE_ROOT}/.git" ]; then
+  git -C "${NC_CORE_ROOT}" submodule sync --recursive
+  git -C "${NC_CORE_ROOT}" submodule update \
+    --init \
+    --recursive \
+    --depth 1
+fi
+
+if [ ! -f "${NC_CORE_ROOT}/3rdparty/autoload.php" ]; then
+  nc_fail "Nextcloud 3rdparty autoloader 不存在；請確認 core clone 或 submodule 是否完整。"
+  exit 1
+fi
+
+nc_link_app
+APP_ID="$(nc_app_id)"
+
+cd "${NC_CORE_ROOT}"
+
+if [ ! -f "config/config.php" ]; then
+  ADMIN_PASSWORD="${NEXTCLOUD_ADMIN_PASSWORD:-}"
+  GENERATED_PASSWORD=false
+
+  if [ -z "${ADMIN_PASSWORD}" ] && [ -t 0 ]; then
+    read -r -s -p "Nextcloud ${ADMIN_USER} 管理員密碼：" ADMIN_PASSWORD
+    printf '\n'
+  fi
+
+  if [ -z "${ADMIN_PASSWORD}" ]; then
+    ADMIN_PASSWORD="$(php -r 'echo bin2hex(random_bytes(12));')"
+    GENERATED_PASSWORD=true
+  fi
+
+  printf '正在安裝 Nextcloud…\n'
+  php occ maintenance:install \
+    --no-interaction \
+    --database=mysql \
+    --database-name=db \
+    --database-host=db \
+    --database-user=db \
+    --database-pass=db \
+    --admin-user="${ADMIN_USER}" \
+    --admin-pass="${ADMIN_PASSWORD}" \
+    --data-dir="${NC_CORE_ROOT}/data"
+
+  if [ "${GENERATED_PASSWORD}" = true ]; then
+    printf '非互動安裝產生的管理員密碼：%s\n' "${ADMIN_PASSWORD}"
+  fi
+elif [ "${CORE_UPDATED}" = true ]; then
+  printf '正在套用 Nextcloud 資料庫升級…\n'
+  php occ upgrade --no-interaction
+fi
+
+php occ maintenance:update:htaccess --no-interaction
+php occ app:enable "${APP_ID}"
+
+if [ "${CORE_CREATED}" = true ]; then
+  printf 'Nextcloud core 已建立於 %s\n' "${NC_CORE_ROOT}"
+fi
+printf 'Nextcloud app %s 已啟用。\n' "${APP_ID}"
+printf '網站：%s\n' "${DDEV_PRIMARY_URL:-請執行 ddev describe 查詢}"
