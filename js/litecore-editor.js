@@ -4,9 +4,11 @@
  * in place and only then imports the shipped editor module, which reads it once:
  *
  *   load()  -- WebDAV GET of the user's file; the ETag is kept.
- *   save()  -- WebDAV PUT with If-Match on that ETag. A 412 means the file changed
- *              since it was opened (or was moved away): nothing is overwritten and
- *              the page is told so. On success the new ETag replaces the old one.
+ *   save()  -- WebDAV PUT with If-Match on that ETag; never unconditional. A 412
+ *              means the file changed since it was opened (or was moved away):
+ *              nothing is overwritten, the bytes are saved next to it as a
+ *              conflict copy, and the page is told both. On success the new ETag
+ *              replaces the old one, so the next save chains on it.
  *
  * No server-side document processing: the bytes go browser <-> WebDAV.
  * Everything observed is published on <html data-litecore> for a driver.
@@ -49,49 +51,98 @@
 		return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('')
 	}
 
-	const token = () => document.head.dataset.requesttoken || ''
+	// X-Requested-With: without it an expired session's 401 carries
+	// `WWW-Authenticate: Basic` and the browser pops a credentials dialog.
+	const headers = (extra) => ({ requesttoken: document.head.dataset.requesttoken || '', 'X-Requested-With': 'XMLHttpRequest', ...extra })
+	// OC-ETag first: Nextcloud copies the ETag into it for setups whose proxy
+	// strips or rewrites ETag (apps/dav CopyEtagHeaderPlugin).
+	const versionOf = (response) => response.headers.get('oc-etag') || response.headers.get('etag')
+	const conflict = (message) => Object.assign(new Error(message), { code: 'CONFLICT' })
 	let config = null
 	let etag = null
+
+	// The user's bytes never get stranded by a conflict: they go next to the
+	// file as a new one, which is created only if that name is free.
+	async function saveConflictCopy(bytes) {
+		const slash = config.file.davUrl.lastIndexOf('/')
+		const folder = config.file.davUrl.slice(0, slash + 1)
+		const stem = config.file.name.replace(/\.odt$/i, '')
+		const now = new Date()
+		const pad = (n) => String(n).padStart(2, '0')
+		const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+		for (let attempt = 1; attempt <= 5; attempt++) {
+			const name = `${stem}（衝突副本 ${stamp}${attempt > 1 ? `-${attempt}` : ''}）.odt`
+			const response = await fetch(folder + encodeURIComponent(name), {
+				method: 'PUT', credentials: 'same-origin', body: bytes,
+				headers: headers({ 'Content-Type': ODT, 'If-None-Match': '*' }),
+			})
+			if (response.ok) return { name, status: response.status }
+			if (response.status !== 412) return { name, status: response.status, failed: true }
+		}
+		return { failed: true, status: 412 }
+	}
 
 	// Put in place by run(), before the product module is imported.
 	const host = {
 		async load() {
 			const response = await fetch(config.file.davUrl, {
-				credentials: 'same-origin', cache: 'no-store', headers: { requesttoken: token() },
+				credentials: 'same-origin', cache: 'no-store', headers: headers(),
 			})
 			const bytes = await response.arrayBuffer()
-			etag = response.headers.get('etag')
+			etag = versionOf(response)
 			out.fetched = {
 				status: response.status, contentType: response.headers.get('content-type'),
 				etag, bytes: bytes.byteLength, sha256: await hex(bytes),
 			}
 			step('fetched')
 			if (!response.ok) throw Object.assign(new Error(`WebDAV GET ${response.status}`), { code: 'HOST_LOAD_FAILED' })
+			// Without a version there is no conditional write, and an unconditional
+			// one overwrites whatever changed since. Refuse rather than fail open.
+			if (!etag) throw Object.assign(new Error('伺服器沒有給這個檔案的版本標記，無法安全存回。'), { code: 'HOST_LOAD_FAILED' })
 			return { bytes, name: config.file.name }
 		},
 
 		async save(bytes, { name }) {
-			const record = { at: Date.now() - out.started, name, bytes: bytes.byteLength, sha256: await hex(bytes), ifMatch: etag }
+			const record = { at: Date.now() - out.started, name, bytes: bytes.byteLength }
 			out.saves.push(record)
-			const headers = { requesttoken: token(), 'Content-Type': ODT }
-			if (etag) headers['If-Match'] = etag
-			const response = await fetch(config.file.davUrl, { method: 'PUT', credentials: 'same-origin', headers, body: bytes })
-			record.status = response.status
-			record.etag = response.headers.get('etag')
-			publish()
-			if (response.status === 412) {
-				throw Object.assign(new Error('檔案在你開啟之後已被別處修改或移走，沒有覆寫。請重新開啟。'), { code: 'CONFLICT' })
-			}
-			if (!response.ok) throw Object.assign(new Error(`WebDAV PUT ${response.status}`), { code: 'HOST_SAVE_FAILED' })
-			if (!record.etag) {
-				// Without the new ETag the next save would be refused as a conflict.
-				const head = await fetch(config.file.davUrl, { method: 'HEAD', credentials: 'same-origin', headers: { requesttoken: token() } })
-				record.etag = head.headers.get('etag')
-				record.etagFrom = 'HEAD'
+			try {
+				await saveOnce(bytes, record)
+			} finally {
+				// Everything this save will do is done, conflict copy included.
+				record.settled = true
 				publish()
 			}
-			etag = record.etag
 		},
+	}
+
+	async function saveOnce(bytes, record) {
+		record.sha256 = await hex(bytes)
+		if (!etag) throw Object.assign(new Error('不知道伺服器上的版本，不做無條件覆寫。'), { code: 'HOST_SAVE_FAILED' })
+		record.ifMatch = etag
+		const response = await fetch(config.file.davUrl, {
+			method: 'PUT', credentials: 'same-origin', body: bytes,
+			headers: headers({ 'Content-Type': ODT, 'If-Match': etag }),
+		})
+		record.status = response.status
+		publish()
+		if (response.status === 412) {
+			record.responseEtag = versionOf(response)
+			record.conflictCopy = await saveConflictCopy(bytes)
+			publish()
+			if (record.conflictCopy.failed) {
+				throw conflict(`檔案在你開啟之後已被別處修改或移走，沒有覆寫；另存副本也失敗（HTTP ${record.conflictCopy.status}）。`)
+			}
+			throw conflict(`檔案在你開啟之後已被別處修改或移走，沒有覆寫。你的內容另存為「${record.conflictCopy.name}」。`)
+		}
+		if (!response.ok) throw Object.assign(new Error(`WebDAV PUT ${response.status}`), { code: 'HOST_SAVE_FAILED' })
+		record.etag = versionOf(response)
+		if (!record.etag) {
+			// Without the new version the next save would be refused as a conflict.
+			const head = await fetch(config.file.davUrl, { method: 'HEAD', credentials: 'same-origin', headers: headers() })
+			record.etag = versionOf(head)
+			record.etagFrom = 'HEAD'
+		}
+		etag = record.etag
 	}
 
 	async function run() {
