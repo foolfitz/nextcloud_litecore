@@ -1,6 +1,8 @@
-# dist is a symlink to the read-only mount of study_LiteCore's wasm_sdk_probe/dist
-# inside the web container (.ddev/docker-compose.litecore-dist.yaml); it is tracked
-# as a symlink, never as content.
+# The packaged engine (study_LiteCore wasm_sdk_probe/tools/package_m3_engine.py):
+# ~64 MB of gzip, built from study_LiteCore's dist/, shipped in the release archive,
+# never committed.
+/engine/
+/engine.new/
 /node_modules/
 
 # BEGIN ddev-nextcloud-app

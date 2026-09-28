@@ -16,6 +16,7 @@ use OCP\AppFramework\Http\EmptyContentSecurityPolicy;
 use OCP\AppFramework\Http\NotFoundResponse;
 use OCP\AppFramework\Http\RedirectResponse;
 use OCP\AppFramework\Http\Response;
+use OCP\AppFramework\Http\StreamResponse;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\AppFramework\Services\IInitialState;
 use OCP\Files\File;
@@ -29,8 +30,16 @@ use OCP\Util;
  * The editor route, in the shape M3 gate 0 passed (study_LiteCore
  * findings/evidence/m3-gate-0/RESULT.md, shape E1h): the shipped page re-wrapped
  * under Nextcloud's header, COOP + COEP require-corp on the page, every engine
- * script served by PHP with COEP (a static script from the app directory has no
- * COEP and the engine dies at boot -- E1), `.wasm` static, data files via PHP.
+ * script served with COEP (a static script from the app directory has no COEP
+ * and the engine dies at boot -- E1).
+ *
+ * The engine is the app's own `engine/` (study_LiteCore
+ * specs/SPEC-M3-asset-delivery.md): every file of the editor's closure, gzip'd,
+ * listed in `engine/MANIFEST.json`. All of it is served here, under an address
+ * that carries the build id, as the packaged gzip bytes with Content-Encoding
+ * and a year's immutable caching -- the one way the 115 MB wasm fits in either
+ * browser's HTTP cache (sent as it is, Firefox never keeps it and Chrome keeps
+ * it only on a roomy disk; step 0 of that spec).
  *
  * This route never reads, parses or converts the document. It resolves the file
  * id to the user's own WebDAV URL; the browser fetches the bytes from Nextcloud's
@@ -54,34 +63,36 @@ class EditorController extends Controller {
 		parent::__construct($appName, $request);
 	}
 
+	/**
+	 * `r/e2-editor.html?fileId=N` is what Files links to: it sends the browser to
+	 * this build's address. `r/<buildId>/<path>` is the editor document and every
+	 * file it loads -- the page's relative URLs (its modules, the worker, what the
+	 * worker fetches) all land under the same build id. The redirect names
+	 * index.php outright, so no request depends on how a web server falls back
+	 * for a path that is not a file on disk.
+	 */
 	#[NoAdminRequired]
 	#[NoCSRFRequired]
 	#[FrontpageRoute(verb: 'GET', url: '/r/{path}', requirements: ['path' => '.+'])]
 	public function asset(string $path, int $fileId = 0): Response {
-		if (str_contains($path, '..') || str_contains($path, "\0")) {
-			return new NotFoundResponse();
+		$engine = $this->engine();
+		if ($engine === null) {
+			return new DataDisplayResponse('the engine is not packaged (engine/MANIFEST.json)', Http::STATUS_INTERNAL_SERVER_ERROR);
 		}
 		if ($path === 'e2-editor.html') {
-			return $this->editor($fileId);
+			// getWebroot(), not linkTo('', 'index.php'): with pretty URLs on, the latter
+			// is "/", and "/" . "/apps/..." is a scheme-relative URL to a host named apps.
+			return new RedirectResponse($this->urls->getWebroot() . '/index.php/apps/' . Application::APP_ID
+				. '/r/' . $engine['buildId'] . '/e2-editor.html?fileId=' . $fileId);
 		}
-		$file = $this->dist() . '/' . $path;
-		if (!is_file($file)) {
+		$parts = explode('/', $path, 2);
+		if (count($parts) !== 2 || $parts[0] !== $engine['buildId'] || !isset($engine['files'][$parts[1]])) {
 			return new NotFoundResponse();
 		}
-		$extension = pathinfo($path, PATHINFO_EXTENSION);
-		if ($extension === 'wasm') {
-			// Apache serves it (whitelisted, application/wasm); same-origin, so
-			// COEP does not apply to it.
-			return new RedirectResponse($this->urls->linkTo(Application::APP_ID, 'dist/' . $path));
+		if ($parts[1] === 'e2-editor.html') {
+			return $this->editor($fileId);
 		}
-		$script = in_array($extension, ['js', 'mjs'], true);
-		$type = match ($extension) {
-			'js', 'mjs' => 'text/javascript; charset=utf-8',
-			'json' => 'application/json; charset=utf-8',
-			'odt' => self::ODT,
-			default => 'application/octet-stream',
-		};
-		return $this->serve((string)file_get_contents($file), $type, $script);
+		return $this->serve($parts[1], $engine['files'][$parts[1]]);
 	}
 
 	private function editor(int $fileId): Response {
@@ -89,8 +100,7 @@ class EditorController extends Controller {
 		if (is_string($target)) {
 			return new DataDisplayResponse($target, Http::STATUS_NOT_FOUND, ['Content-Type' => 'text/plain; charset=utf-8']);
 		}
-		$source = $this->dist() . '/e2-editor.html';
-		$html = (string)file_get_contents($source);
+		$html = (string)gzdecode((string)file_get_contents($this->packed('e2-editor.html')));
 		if (!preg_match('#<style>(.*?)</style>#s', $html, $style) || !preg_match('#<body>(.*)</body>#s', $html, $body)
 			|| substr_count($body[1], self::PRODUCT_SCRIPT) !== 1) {
 			return new DataDisplayResponse('the shipped page no longer has the shape this app re-wraps', Http::STATUS_INTERNAL_SERVER_ERROR);
@@ -150,26 +160,85 @@ class EditorController extends Controller {
 	}
 
 	/**
+	 * The packaged bytes as they are, when the browser takes gzip; decoded on the
+	 * way otherwise. Either way streamed, never read whole into memory.
+	 *
 	 * A dedicated worker takes its CSP from its own response, and Nextcloud
 	 * always sends one; this grants what the product's workers do (importScripts,
 	 * fetch, nested pthread workers, wasm compile). Scripts carry COEP, which is
 	 * what lets them run as workers of an isolated page.
+	 *
+	 * @param array{bytes: int, gzBytes: int} $entry
 	 */
-	private function serve(string $bytes, string $type, bool $coep): Response {
-		$response = new DataDisplayResponse($bytes, Http::STATUS_OK, ['Content-Type' => $type, 'Cache-Control' => 'no-cache']);
+	private function serve(string $path, array $entry): Response {
+		$extension = pathinfo($path, PATHINFO_EXTENSION);
+		$type = match ($extension) {
+			'js', 'mjs' => 'text/javascript; charset=utf-8',
+			'json' => 'application/json; charset=utf-8',
+			'wasm' => 'application/wasm',
+			default => 'application/octet-stream',
+		};
+		$packed = $this->packed($path);
+		if ($this->acceptsGzip()) {
+			$response = new StreamResponse($packed, Http::STATUS_OK, ['Content-Type' => $type,
+				'Content-Encoding' => 'gzip', 'Content-Length' => (string)$entry['gzBytes']]);
+		} else {
+			$stream = fopen('compress.zlib://' . $packed, 'rb');
+			if ($stream === false) {
+				return new NotFoundResponse();
+			}
+			$response = new StreamResponse($stream, Http::STATUS_OK, ['Content-Type' => $type,
+				'Content-Length' => (string)$entry['bytes']]);
+		}
+		$response->addHeader('Vary', 'Accept-Encoding');
+		// The address carries the build id: these bytes never change under it.
+		$response->cacheFor(31536000, false, true);
 		$policy = new EmptyContentSecurityPolicy();
 		$policy->addAllowedScriptDomain('\'self\'');
 		$policy->addAllowedConnectDomain('\'self\'');
 		$policy->addAllowedWorkerSrcDomain('\'self\'');
 		$policy->allowEvalWasm(true);
 		$response->setContentSecurityPolicy($policy);
-		if ($coep) {
+		if (in_array($extension, ['js', 'mjs'], true)) {
 			$response->addHeader('Cross-Origin-Embedder-Policy', 'require-corp');
 		}
 		return $response;
 	}
 
-	private function dist(): string {
-		return dirname(__DIR__, 2) . '/dist';
+	private function acceptsGzip(): bool {
+		foreach (explode(',', (string)$this->request->getHeader('Accept-Encoding')) as $coding) {
+			$fields = array_map('trim', explode(';', $coding));
+			if (strtolower($fields[0]) !== 'gzip') {
+				continue;
+			}
+			foreach (array_slice($fields, 1) as $parameter) {
+				if (preg_match('/^q=0(\.0*)?$/i', $parameter)) {
+					return false;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * @return array{buildId: string, files: array<string, array{bytes: int, sha256: string, gzBytes: int, gzSha256: string}>}|null
+	 */
+	private function engine(): ?array {
+		$manifest = json_decode((string)@file_get_contents($this->engineDir() . '/MANIFEST.json'), true);
+		if (!is_array($manifest) || ($manifest['schema'] ?? null) !== 'litecore-engine/1'
+			|| !is_string($manifest['buildId'] ?? null) || !is_array($manifest['files'] ?? null)) {
+			return null;
+		}
+		return $manifest;
+	}
+
+	/** Only ever called with a path the manifest lists. */
+	private function packed(string $path): string {
+		return $this->engineDir() . '/files/' . $path . '.gz';
+	}
+
+	private function engineDir(): string {
+		return dirname(__DIR__, 2) . '/engine';
 	}
 }

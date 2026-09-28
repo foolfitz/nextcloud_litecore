@@ -1,6 +1,0 @@
-# The shipped editor's build output (study_LiteCore wasm_sdk_probe/dist), read-only,
-# at /mnt/litecore-dist. The app's `dist` symlink points there.
-services:
-  web:
-    volumes:
-      - /home/jiajun/LibreOffice/study_LiteCore/wasm_sdk_probe/dist:/mnt/litecore-dist:ro
