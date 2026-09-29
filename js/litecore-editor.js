@@ -14,11 +14,13 @@
  *              previous PUT's answer, and only after reading the file back:
  *              the same version with other bytes is a write If-Match cannot
  *              see (study_LiteCore findings 103, 104). A 412 while carrying the token
- *              may only mean the lock died; if the token is gone from the
- *              server, it is retried once without it.
+ *              may only mean the lock died; if the token it carried is gone
+ *              from the server, it is retried once without it.
  *              Any other refusal, or no network: the bytes go next to the file
  *              as a copy; if even that fails they stay here, behind a download
- *              button, and leaving the page asks first.
+ *              button, and leaving the page asks first. So does a save that
+ *              throws for any other reason: every save ends saved, copied or
+ *              stranded.
  *   leaving  -- UNLOCK, keepalive, at beforeunload (unless leaving is being
  *              asked about) and again at pagehide. A crashed tab's lock
  *              lapses by itself. Leaving is asked about when bytes are
@@ -105,6 +107,9 @@
 	let lastSha = null
 	// performance.now() when our previous PUT to the file was answered.
 	let lastAnswered = null
+	// The lock token our latest PUT carried, if any. Not `token`: a refresh
+	// answered while that PUT was out can drop `token` to null (loseLock).
+	let sentToken = null
 	// The page's answer to "are there edits nobody saved?" (watchUnsaved).
 	let pageUnsaved = null
 
@@ -137,6 +142,7 @@
 
 	// true / false, or null when the server did not say.
 	async function tokenOnServer(held) {
+		if (!held) return false
 		const response = await send(config.file.davUrl, {
 			method: 'PROPFIND',
 			body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:lockdiscovery/></d:prop></d:propfind>',
@@ -371,6 +377,17 @@
 			inFlight++
 			try {
 				await saveOnce(bytes, record)
+			} catch (error) {
+				// Every save ends one of three ways: the original written, a copy
+				// written, or the bytes kept here with leaving guarded -- the page
+				// counts on it (study_LiteCore SPEC-M3-page-honesty §7.1). A throw
+				// that is none of those (a bug, an answer nobody expected) keeps
+				// the bytes rather than let them go.
+				if (record.outcome) throw error
+				record.unexpected = `${error && error.name}: ${error && error.message}`
+				strand(bytes, record.sha256 || null)
+				record.outcome = 'stranded'
+				throw failure('HOST_SAVE_FAILED', '存回時發生未預期的錯誤：內容還在這個頁面裡，請按「下載這份內容」。')
 			} finally {
 				// Everything this save will do is done, copy included.
 				inFlight--
@@ -427,6 +444,7 @@
 		attempt.at = Date.now() - out.started
 		const extra = { 'Content-Type': ODT, 'If-Match': etag }
 		if (token) extra.If = `(${token})`
+		sentToken = token
 		const response = await send(config.file.davUrl, { method: 'PUT', body: bytes, headers: headers(extra) })
 		lastAnswered = performance.now()
 		attempt.respondedAt = Date.now() - out.started
@@ -449,7 +467,12 @@
 		// 412 even when nothing changed. But a live lock can meet a 412 too:
 		// someone's refused unlock still moves the ETag. So ask the server.
 		if (response.status === 412 && record.attempts[0].withToken) {
-			record.tokenOnServer = await tokenOnServer(token)
+			// The token that went out, not `token`: if a refresh lost the lock
+			// while the PUT was on the wire, `token` is null here, and asking
+			// about null threw -- the save ended with no copy and nothing
+			// stranded, and leaving was not asked about (study_LiteCore
+			// probe_m3_save_throw.py).
+			record.tokenOnServer = await tokenOnServer(sentToken)
 			if (record.tokenOnServer === false) {
 				loseLock('save', 412)
 				response = await put(bytes, record)
@@ -467,6 +490,7 @@
 			etag = record.etag
 			lastSha = record.sha256
 			unstrand('saved')
+			record.outcome = 'saved'
 			return
 		}
 		const conflict = response.status === 412 || response.status === 423 || response.status === 'changed'
@@ -485,9 +509,11 @@
 		const code = conflict ? 'CONFLICT' : 'HOST_SAVE_FAILED'
 		if (!record.conflictCopy.failed) {
 			unstrand('copy')
+			record.outcome = 'copy'
 			throw failure(code, `${why}你的內容另存為「${record.conflictCopy.name}」。`)
 		}
 		strand(bytes, record.sha256)
+		record.outcome = 'stranded'
 		throw failure(code, `${why}另存副本也失敗（${record.conflictCopy.status}）：內容還在這個頁面裡，請按「下載這份內容」。`)
 	}
 
