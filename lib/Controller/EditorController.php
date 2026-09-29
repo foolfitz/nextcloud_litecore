@@ -34,13 +34,14 @@ use OCP\Util;
  * and the engine dies at boot -- E1).
  *
  * The engine is the app's own `engine/` (study_LiteCore
- * specs/SPEC-M3-asset-delivery.md): every file of the editor's closure, gzip'd,
- * listed in `engine/MANIFEST.json`. All of it is served here, under an address
- * that carries the build id and a hash of how the files are served, as the
- * packaged gzip bytes with Content-Encoding and a year's immutable caching --
- * the one way the 115 MB wasm fits in either
+ * specs/SPEC-M3-asset-delivery.md): every file of the editor's closure, as zstd
+ * and as gzip, listed in `engine/MANIFEST.json`. All of it is served here, under
+ * an address that carries the build id and a hash of how the files are served,
+ * as packaged compressed bytes with Content-Encoding and a year's immutable
+ * caching -- the one way the 115 MB wasm fits in either
  * browser's HTTP cache (sent as it is, Firefox never keeps it and Chrome keeps
- * it only on a roomy disk; step 0 of that spec).
+ * it only on a roomy disk; step 0 of that spec). zstd first, where the request
+ * takes it (specs/SPEC-M3-zstd.md): about a quarter fewer bytes than gzip.
  *
  * This route never reads, parses or converts the document. It resolves the file
  * id to the user's own WebDAV URL; the browser fetches the bytes from Nextcloud's
@@ -78,7 +79,11 @@ class EditorController extends Controller {
 		'coep' => ['js' => 'require-corp', 'mjs' => 'require-corp'],
 		'csp' => ['script' => ["'self'"], 'connect' => ["'self'"], 'worker' => ["'self'"], 'evalWasm' => true],
 		'cache' => ['seconds' => 31536000, 'public' => false, 'immutable' => true],
-		'encoding' => 'gzip',
+		// In order of preference; each coding's packaged file and manifest fields.
+		'encodings' => [
+			'zstd' => ['suffix' => '.zst', 'bytes' => 'zstBytes', 'sha256' => 'zstSha256'],
+			'gzip' => ['suffix' => '.gz', 'bytes' => 'gzBytes', 'sha256' => 'gzSha256'],
+		],
 		'vary' => 'Accept-Encoding',
 	];
 
@@ -142,7 +147,7 @@ class EditorController extends Controller {
 		if (is_string($target)) {
 			return new DataDisplayResponse($target, Http::STATUS_NOT_FOUND, ['Content-Type' => 'text/plain; charset=utf-8']);
 		}
-		$html = (string)gzdecode((string)file_get_contents($this->packed('e2-editor.html')));
+		$html = (string)gzdecode((string)file_get_contents($this->packed('e2-editor.html', '.gz')));
 		if (!preg_match('#<style>(.*?)</style>#s', $html, $style) || !preg_match('#<body>(.*)</body>#s', $html, $body)
 			|| substr_count($body[1], self::PRODUCT_SCRIPT) !== 1) {
 			return new DataDisplayResponse('the shipped page no longer has the shape this app re-wraps', Http::STATUS_INTERNAL_SERVER_ERROR);
@@ -202,29 +207,38 @@ class EditorController extends Controller {
 	}
 
 	/**
-	 * The packaged bytes as they are, when the browser takes gzip; decoded on the
-	 * way otherwise. Either way streamed, never read whole into memory.
+	 * The packaged bytes as they are, in the first coding of the policy the
+	 * browser takes; decoded from the gzip on the way when it takes none. Either
+	 * way streamed, never read whole into memory.
 	 *
 	 * A dedicated worker takes its CSP from its own response, and Nextcloud
 	 * always sends one; this grants what the product's workers do (importScripts,
 	 * fetch, nested pthread workers, wasm compile). Scripts carry COEP, which is
 	 * what lets them run as workers of an isolated page.
 	 *
-	 * @param array{bytes: int, sha256: string, gzBytes: int, gzSha256: string} $entry
+	 * @param array{bytes: int, sha256: string, gzBytes: int, gzSha256: string, zstBytes: int, zstSha256: string} $entry
 	 */
 	private function serve(string $path, array $entry): Response {
-		$packed = $this->packed($path);
+		$serving = self::SERVE_POLICY;
+		$coding = null;
+		foreach (array_keys($serving['encodings']) as $candidate) {
+			if ($this->accepts($candidate)) {
+				$coding = $candidate;
+				break;
+			}
+		}
+		// Identity is decoded from the gzip file.
+		$packed = $this->packed($path, $serving['encodings'][$coding ?? 'gzip']['suffix']);
 		if (!is_file($packed)) {
 			// Listed but missing: a plain 404, not one carrying a year of caching.
 			return new NotFoundResponse();
 		}
-		$serving = self::SERVE_POLICY;
 		$extension = pathinfo($path, PATHINFO_EXTENSION);
 		$type = $serving['types'][$extension] ?? $serving['types'][''];
-		$gzip = $this->acceptsGzip();
-		if ($gzip) {
+		if ($coding !== null) {
+			$fields = $serving['encodings'][$coding];
 			$response = new StreamResponse($packed, Http::STATUS_OK, ['Content-Type' => $type,
-				'Content-Encoding' => $serving['encoding'], 'Content-Length' => (string)$entry['gzBytes']]);
+				'Content-Encoding' => $coding, 'Content-Length' => (string)$entry[$fields['bytes']]]);
 		} else {
 			$stream = fopen('compress.zlib://' . $packed, 'rb');
 			if ($stream === false) {
@@ -241,7 +255,7 @@ class EditorController extends Controller {
 		// cache: "no-cache" (sdk-worker.js), and Chrome sends that to the server
 		// every open. With an ETag, Nextcloud's NotModifiedMiddleware answers it
 		// 304 with no body. One per representation: the hash of the bytes sent.
-		$response->setETag($gzip ? $entry['gzSha256'] : $entry['sha256']);
+		$response->setETag($coding !== null ? $entry[$serving['encodings'][$coding]['sha256']] : $entry['sha256']);
 		$policy = new EmptyContentSecurityPolicy();
 		foreach ($serving['csp']['script'] as $source) {
 			$policy->addAllowedScriptDomain($source);
@@ -260,10 +274,11 @@ class EditorController extends Controller {
 		return $response;
 	}
 
-	private function acceptsGzip(): bool {
+	/** Whether Accept-Encoding names this coding with a q other than 0 ("*" does not count). */
+	private function accepts(string $wanted): bool {
 		foreach (explode(',', (string)$this->request->getHeader('Accept-Encoding')) as $coding) {
 			$fields = array_map('trim', explode(';', $coding));
-			if (strtolower($fields[0]) !== 'gzip') {
+			if (strtolower($fields[0]) !== $wanted) {
 				continue;
 			}
 			foreach (array_slice($fields, 1) as $parameter) {
@@ -277,11 +292,11 @@ class EditorController extends Controller {
 	}
 
 	/**
-	 * @return array{buildId: string, files: array<string, array{bytes: int, sha256: string, gzBytes: int, gzSha256: string}>}|null
+	 * @return array{buildId: string, files: array<string, array{bytes: int, sha256: string, gzBytes: int, gzSha256: string, zstBytes: int, zstSha256: string}>}|null
 	 */
 	private function engine(): ?array {
 		$manifest = json_decode((string)@file_get_contents($this->engineDir() . '/MANIFEST.json'), true);
-		if (!is_array($manifest) || ($manifest['schema'] ?? null) !== 'litecore-engine/1'
+		if (!is_array($manifest) || ($manifest['schema'] ?? null) !== 'litecore-engine/2'
 			|| !is_string($manifest['buildId'] ?? null) || !is_array($manifest['files'] ?? null)) {
 			return null;
 		}
@@ -289,8 +304,8 @@ class EditorController extends Controller {
 	}
 
 	/** Only ever called with a path the manifest lists. */
-	private function packed(string $path): string {
-		return $this->engineDir() . '/files/' . $path . '.gz';
+	private function packed(string $path, string $suffix): string {
+		return $this->engineDir() . '/files/' . $path . $suffix;
 	}
 
 	private function engineDir(): string {
