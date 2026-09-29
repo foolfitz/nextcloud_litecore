@@ -21,7 +21,13 @@
  *              button, and leaving the page asks first.
  *   leaving  -- UNLOCK, keepalive, at beforeunload (unless leaving is being
  *              asked about) and again at pagehide. A crashed tab's lock
- *              lapses by itself.
+ *              lapses by itself. Leaving is asked about when bytes are
+ *              stranded, a save is in flight, or the page says it holds edits
+ *              nobody saved (watchUnsaved, study_LiteCore finding 107): this
+ *              listener is the only one that decides, because it is the one
+ *              that would release the lock.
+ *   readOnly -- a file the user may not write is handed to the page with
+ *              `readOnly: true` and opens view-only; no lock is taken.
  *
  * No server-side document processing: the bytes go browser <-> WebDAV.
  * Everything observed is published on <html data-litecore> for a driver.
@@ -99,6 +105,8 @@
 	let lastSha = null
 	// performance.now() when our previous PUT to the file was answered.
 	let lastAnswered = null
+	// The page's answer to "are there edits nobody saved?" (watchUnsaved).
+	let pageUnsaved = null
 
 	// The host's own line above the product: what the lock or the permissions
 	// mean for saving, and -- while bytes have nowhere to go -- the way out.
@@ -141,7 +149,7 @@
 	async function takeLock() {
 		if (!config.file.writable) {
 			out.lock = { state: 'readonly' }
-			setLockNotice('唯讀：你沒有這個檔案的寫入權限，存檔會另存副本。')
+			setLockNotice('唯讀：只能檢視，不能修改或存檔。')
 			return
 		}
 		// The owner text is what others see as the holder (files_lock shows it
@@ -230,9 +238,23 @@
 	}
 
 	window.addEventListener('beforeunload', (event) => {
-		// -- the way out (spec §3 S4-S6): asked about, so the page may stay; keep the lock
-		if (stranded || inFlight > 0) {
+		// -- the way out (spec §3 S4-S6): asked about, so the page may stay; keep the lock.
+		// The page's own question counts too; an answer that throws counts as
+		// "yes" -- asking once too often loses nothing, not asking loses edits.
+		const reasons = []
+		if (stranded) reasons.push('stranded')
+		if (inFlight > 0) reasons.push('inFlight')
+		if (pageUnsaved) {
+			try {
+				if (pageUnsaved() === true) reasons.push('page')
+			} catch (error) {
+				reasons.push('page-error')
+			}
+		}
+		if (reasons.length > 0) {
 			out.guarded = (out.guarded || 0) + 1
+			out.guards = out.guards || []
+			out.guards.push({ at: Date.now() - out.started, reasons })
 			publish()
 			event.preventDefault()
 			event.returnValue = ''
@@ -328,7 +350,19 @@
 			// Without a version there is no conditional write, and an unconditional
 			// one overwrites whatever changed since. Refuse rather than fail open.
 			if (!etag) throw failure('HOST_LOAD_FAILED', '伺服器沒有給這個檔案的版本標記，無法安全存回。')
-			return { bytes, name: config.file.name }
+			// The page opens view-only on this (study_LiteCore SPEC-M3-page-honesty).
+			out.handedReadOnly = !config.file.writable
+			return { bytes, name: config.file.name, readOnly: !config.file.writable }
+		},
+
+		// The page asks here instead of registering its own beforeunload: this
+		// host's listener runs first and releases the lock when it does not
+		// guard, so a page that asked on its own would leave a user who chose to
+		// stay without a lock (study_LiteCore SPEC-M3-page-honesty §7.1).
+		watchUnsaved(check) {
+			pageUnsaved = typeof check === 'function' ? check : null
+			out.watchingPage = pageUnsaved !== null
+			publish()
 		},
 
 		async save(bytes, { name }) {
