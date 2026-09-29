@@ -10,7 +10,10 @@
  *              for elapsed + 300 s, because files_lock counts the timeout from
  *              when the lock was taken, not from the refresh (finding 101).
  *   save()  -- WebDAV PUT with If-Match on that ETag, never unconditional, plus
- *              the lock token while one is held. A 412 while carrying the token
+ *              the lock token while one is held. Not within a second of our
+ *              previous PUT's answer, and only after reading the file back:
+ *              the same version with other bytes is a write If-Match cannot
+ *              see (study_LiteCore findings 103, 104). A 412 while carrying the token
  *              may only mean the lock died; if the token is gone from the
  *              server, it is retried once without it.
  *              Any other refusal, or no network: the bytes go next to the file
@@ -92,6 +95,10 @@
 	let lockNotice = ''
 	let lockedAt = 0
 	let inFlight = 0
+	// The bytes `etag` belongs to: what load() read, or the last save that landed.
+	let lastSha = null
+	// performance.now() when our previous PUT to the file was answered.
+	let lastAnswered = null
 
 	// The host's own line above the product: what the lock or the permissions
 	// mean for saving, and -- while bytes have nowhere to go -- the way out.
@@ -315,6 +322,7 @@
 				status: response.status, contentType: response.headers.get('content-type'),
 				etag, bytes: bytes.byteLength, sha256: await hex(bytes), at: Date.now() - out.started,
 			}
+			lastSha = out.fetched.sha256
 			step('fetched')
 			if (!response.ok) throw failure('HOST_LOAD_FAILED', `WebDAV GET ${response.status}`)
 			// Without a version there is no conditional write, and an unconditional
@@ -338,12 +346,56 @@
 		},
 	}
 
+	// -- two writes in one second (study_LiteCore findings 103, 104)
+	// Nextcloud names a version after the file's mtime in seconds, and keeps the
+	// ETag for a second write in the same second. Two PUTs of ours in one second
+	// leave the first in no version, and a restore after them loses the second
+	// for good (104). So a PUT waits until a second has passed since our previous
+	// one was answered; a save that does not follow another that closely does
+	// not wait at all.
+	// If-Match cannot see someone else's write in the same second as the version
+	// it names either (103), so the file is read back before each PUT: the same
+	// version with other bytes is such a write, and it is not overwritten. The
+	// read comes after the wait, so a write landing after it is in a later
+	// second than ours and does move the ETag (if the server stamps its mtime).
+	// 1.1 s rather than 1.0: a coarsened clock (Firefox's resistFingerprinting)
+	// can read 1000 ms after less than that really passed. Concurrent save()
+	// calls are not queued here -- the page queues its saves.
+	const SPACING_MS = 1100
 	async function put(bytes, record) {
-		const attempt = { ifMatch: etag, withToken: token !== null, at: Date.now() - out.started }
+		const attempt = {}
 		record.attempts.push(attempt)
+		const waitFrom = performance.now()
+		while (lastAnswered !== null && lastAnswered + SPACING_MS > performance.now()) {
+			await new Promise((resolve) => setTimeout(resolve, lastAnswered + SPACING_MS - performance.now()))
+		}
+		attempt.waited = Math.round(performance.now() - waitFrom)
+		const check = { at: Date.now() - out.started }
+		const read = await send(config.file.davUrl, { cache: 'no-store', headers: headers() })
+		check.status = read.status
+		if (read.ok) {
+			check.etag = versionOf(read)
+			// A body that breaks off is no answer: the PUT below decides, as
+			// before, so a refused save still gets its way out.
+			try {
+				check.sha256 = await hex(await read.arrayBuffer())
+			} catch (error) {
+				check.error = String(error)
+			}
+		}
+		check.ms = Date.now() - out.started - check.at
+		Object.assign(attempt, { check, ifMatch: etag, withToken: token !== null })
+		if (check.sha256 && check.etag === etag && lastSha !== null && check.sha256 !== lastSha) {
+			attempt.status = 'changed'
+			publish()
+			return { ok: false, status: 'changed', headers: new Headers() }
+		}
+		attempt.at = Date.now() - out.started
 		const extra = { 'Content-Type': ODT, 'If-Match': etag }
 		if (token) extra.If = `(${token})`
 		const response = await send(config.file.davUrl, { method: 'PUT', body: bytes, headers: headers(extra) })
+		lastAnswered = performance.now()
+		attempt.respondedAt = Date.now() - out.started
 		attempt.status = response.status
 		if (response.error) attempt.error = response.error
 		publish()
@@ -379,12 +431,14 @@
 				record.etagFrom = 'HEAD'
 			}
 			etag = record.etag
+			lastSha = record.sha256
 			unstrand('saved')
 			return
 		}
-		const conflict = response.status === 412 || response.status === 423
+		const conflict = response.status === 412 || response.status === 423 || response.status === 'changed'
 		const why = {
 			412: '檔案在你開啟之後已被別處修改或移走，沒有覆寫。',
+			changed: '檔案在你開啟之後已被別處修改，沒有覆寫。',
 			423: '檔案正被別人鎖定，沒有覆寫。',
 			403: '你沒有這個檔案的寫入權限。',
 			507: '儲存空間已滿。',
