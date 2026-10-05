@@ -126,6 +126,43 @@
 	}
 	const setLockNotice = (text) => { lockNotice = text; render() }
 
+	// The title (study_LiteCore finding 110): the file's name where the page's own
+	// brand line was (hidden by templates/editor.php), whether the page holds
+	// edits nobody saved, and a way back to the file's folder in Files. Closing is
+	// an ordinary navigation, so leaving asks exactly as any other way out does
+	// (beforeunload below decides). The page's answer is read twice a second
+	// rather than pushed: watchUnsaved hands over a question, not a stream, and
+	// asking it costs a property read.
+	function titleBar() {
+		const bar = document.querySelector('#litecore-editor-root .titlebar')
+		if (!bar) return
+		const title = document.createElement('span')
+		title.id = 'litecore-host-title'
+		title.textContent = config.file.name
+		const unsaved = document.createElement('span')
+		unsaved.id = 'litecore-host-unsaved'
+		unsaved.textContent = '尚未儲存'
+		unsaved.hidden = true
+		bar.prepend(title, unsaved)
+		const close = document.createElement('button')
+		close.type = 'button'
+		close.id = 'litecore-host-close'
+		close.title = '關閉'
+		close.setAttribute('aria-label', '關閉')
+		close.textContent = '✕'
+		close.addEventListener('click', () => { location.assign(config.filesUrl) })
+		bar.append(close)
+		setInterval(() => {
+			let holding = false
+			try {
+				holding = pageUnsaved !== null && pageUnsaved() === true
+			} catch (error) {
+				holding = true
+			}
+			unsaved.hidden = !(holding || stranded)
+		}, 500)
+	}
+
 	// -- the lock (spec §3 O2, K1, C1)
 	async function lockHolder() {
 		const response = await send(config.file.davUrl, {
@@ -521,6 +558,7 @@
 		config = readConfig()
 		globalThis.liteCoreHost = host
 		document.getElementById('litecore-host-download').addEventListener('click', download)
+		titleBar()
 		out.file = { id: config.file.id, name: config.file.name, size: config.file.size, etag: config.file.etag, writable: config.file.writable }
 		out.isolation = {
 			crossOriginIsolated: self.crossOriginIsolated === true,

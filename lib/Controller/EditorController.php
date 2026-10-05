@@ -152,15 +152,23 @@ class EditorController extends Controller {
 			|| substr_count($body[1], self::PRODUCT_SCRIPT) !== 1) {
 			return new DataDisplayResponse('the shipped page no longer has the shape this app re-wraps', Http::STATUS_INTERNAL_SERVER_ERROR);
 		}
+		$scoped = $this->scopedStyle($style[1]);
+		if ($scoped === null) {
+			return new DataDisplayResponse('the shipped page\'s style no longer has the shape this app scopes', Http::STATUS_INTERNAL_SERVER_ERROR);
+		}
 		$this->initialState->provideInitialState('config', [
 			'user' => $this->userSession->getUser()?->getUID(),
 			'userDisplayName' => $this->userSession->getUser()?->getDisplayName(),
 			'file' => $target,
 			'editor' => ['module' => './e2-editor-app.js', 'sourceSha256' => hash('sha256', $html)],
+			// Where the close button goes: the file's folder in Files, the file
+			// highlighted, not opened again (no `openfile`).
+			'filesUrl' => $this->urls->getWebroot() . '/index.php/apps/files/files/' . $target['id']
+				. '?dir=' . rawurlencode($target['dir']),
 		]);
 		Util::addScript(Application::APP_ID, 'litecore-editor');
 		$response = new TemplateResponse(Application::APP_ID, 'editor', [
-			'style' => $style[1],
+			'style' => $scoped,
 			'body' => str_replace(self::PRODUCT_SCRIPT, '', $body[1]),
 		], 'user');
 		$policy = new ContentSecurityPolicy();
@@ -172,13 +180,34 @@ class EditorController extends Controller {
 	}
 
 	/**
+	 * The shipped page's stylesheet, confined to the editor's container
+	 * (study_LiteCore finding 110). Printed as it was, its `body` rule replaced
+	 * Nextcloud's themed background -- the header's white icons ended up on light
+	 * grey -- and its `button`/`select`/`input` rules restyled Nextcloud's own
+	 * controls. Wrapped in `@scope (#litecore-editor-root)` (templates/editor.php)
+	 * every selector matches only inside the container; the page's two
+	 * document-level rules, `:root` (its colours) and `body` (its column layout),
+	 * become `:scope`, the container itself. Exactly one of each, at the start of
+	 * a rule, or the page has changed shape and this refuses rather than guess.
+	 */
+	private function scopedStyle(string $css): ?string {
+		foreach ([':root', 'body'] as $selector) {
+			$css = preg_replace('/(^|\})(\s*)' . preg_quote($selector, '/') . '(\s*)\{/', '$1$2:scope$3{', $css, -1, $count);
+			if ($css === null || $count !== 1) {
+				return null;
+			}
+		}
+		return $css;
+	}
+
+	/**
 	 * The file as the current user sees it, or why not. Only the user's own
 	 * folder: shares received are in it, public links are not (out of scope).
 	 *
 	 * `writable` decides whether the host takes a lock at all: a read-only share
 	 * answers every PUT with 403, so there is nothing a lock would protect.
 	 *
-	 * @return array{id: int, name: string, size: int, etag: string, writable: bool, davUrl: string}|string
+	 * @return array{id: int, name: string, dir: string, size: int, etag: string, writable: bool, davUrl: string}|string
 	 */
 	private function resolve(int $fileId): array|string {
 		$user = $this->userSession->getUser();
@@ -195,9 +224,11 @@ class EditorController extends Controller {
 		}
 		$relative = (string)$folder->getRelativePath($node->getPath());
 		$segments = array_map('rawurlencode', explode('/', ltrim($relative, '/')));
+		$dir = dirname('/' . ltrim($relative, '/'));
 		return [
 			'id' => $node->getId(),
 			'name' => $node->getName(),
+			'dir' => $dir === '.' || $dir === '\\' ? '/' : $dir,
 			'size' => $node->getSize(),
 			'etag' => $node->getEtag(),
 			'writable' => $node->isUpdateable(),
