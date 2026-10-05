@@ -162,9 +162,12 @@ class EditorController extends Controller {
 			'file' => $target,
 			'editor' => ['module' => './e2-editor-app.js', 'sourceSha256' => hash('sha256', $html)],
 			// Where the close button goes: the file's folder in Files, the file
-			// highlighted, not opened again (no `openfile`).
-			'filesUrl' => $this->urls->getWebroot() . '/index.php/apps/files/files/' . $target['id']
-				. '?dir=' . rawurlencode($target['dir']),
+			// highlighted, not opened again -- the route Files' own showFile()
+			// redirects to, without its `openfile`. Built by the router, not by
+			// hand: a hand-made `/index.php/apps/files/...` under pretty URLs landed
+			// on `/apps/files/index.php/apps/files/...`.
+			'filesUrl' => $this->urls->linkToRoute('files.view.indexViewFileid',
+				['view' => 'files', 'fileid' => $target['id'], 'dir' => $target['dir']]),
 		]);
 		Util::addScript(Application::APP_ID, 'litecore-editor');
 		$response = new TemplateResponse(Application::APP_ID, 'editor', [
