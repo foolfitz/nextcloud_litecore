@@ -556,6 +556,10 @@
 
 	async function run() {
 		config = readConfig()
+		// No @scope (Firefox before 146, ESR 140): the scoped sheet is dropped whole,
+		// so the page's own unscoped copy goes on (templates/editor.php).
+		out.scope = typeof CSSScopeRule === 'function' ? 'scoped' : 'unscoped-fallback'
+		if (out.scope !== 'scoped') document.getElementById('litecore-unscoped')?.setAttribute('media', 'all')
 		globalThis.liteCoreHost = host
 		document.getElementById('litecore-host-download').addEventListener('click', download)
 		titleBar()

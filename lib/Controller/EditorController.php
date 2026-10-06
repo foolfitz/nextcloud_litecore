@@ -172,6 +172,7 @@ class EditorController extends Controller {
 		Util::addScript(Application::APP_ID, 'litecore-editor');
 		$response = new TemplateResponse(Application::APP_ID, 'editor', [
 			'style' => $scoped,
+			'unscoped' => $style[1],
 			'body' => str_replace(self::PRODUCT_SCRIPT, '', $body[1]),
 		], 'user');
 		$policy = new ContentSecurityPolicy();
@@ -195,6 +196,13 @@ class EditorController extends Controller {
 	 */
 	private function scopedStyle(string $css): ?string {
 		foreach ([':root', 'body'] as $selector) {
+			// Every occurrence, anywhere (study_LiteCore review 2026-10-06 item 9): a
+			// rule nested in an at-rule (`@media … { :root {`) is not at the start of a
+			// rule, and the anchored replacement below would leave it unrewritten
+			// rather than refuse.
+			if (preg_match_all('/(?<![\w-])' . preg_quote($selector, '/') . '\s*\{/', $css) !== 1) {
+				return null;
+			}
 			$css = preg_replace('/(^|\})(\s*)' . preg_quote($selector, '/') . '(\s*)\{/', '$1$2:scope$3{', $css, -1, $count);
 			if ($css === null || $count !== 1) {
 				return null;

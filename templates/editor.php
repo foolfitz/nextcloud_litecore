@@ -8,6 +8,13 @@
 <style>@scope (#litecore-editor-root) {
 <?php print_unescaped($_['style']); ?>
 }</style>
+<?php // A browser without @scope drops the whole block above, and the editor's hidden
+// parts (the notice, the accessibility projection, the input sink) show. The host
+// script switches this copy on there: the editor works, at finding 110's cost.
+// study_LiteCore review 2026-10-06 item 8. ?>
+<style id="litecore-unscoped" media="not all">
+<?php print_unescaped($_['unscoped']); ?>
+</style>
 <style>
 #litecore-host-bar { display: flex; gap: 12px; align-items: center; padding: 6px 12px; font-size: 14px;
 	background: var(--color-warning, #eca700); color: var(--color-warning-text, #000); }
