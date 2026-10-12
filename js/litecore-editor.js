@@ -20,7 +20,11 @@
  *              as a copy; if even that fails they stay here, behind a download
  *              button, and leaving the page asks first. So does a save that
  *              throws for any other reason: every save ends saved, copied or
- *              stranded.
+ *              stranded. Once a save has gone to a copy, every later save goes
+ *              to that copy (study_LiteCore SPEC-M3-autosave §8.2, the owner's
+ *              O1 = B): without it each save met the same conflict again and
+ *              left one more copy (findings/evidence/127/m3/). The lock on the
+ *              file itself stays held until leaving, as before.
  *   leaving  -- UNLOCK, keepalive, at beforeunload (unless leaving is being
  *              asked about) and again at pagehide. A crashed tab's lock
  *              lapses by itself. Leaving is asked about when bytes are
@@ -86,7 +90,7 @@
 	// OC-ETag first: Nextcloud copies the ETag into it for setups whose proxy
 	// strips or rewrites ETag (apps/dav CopyEtagHeaderPlugin).
 	const versionOf = (response) => response.headers.get('oc-etag') || response.headers.get('etag')
-	const failure = (code, message) => Object.assign(new Error(message), { code })
+	const failure = (code, message, extra) => Object.assign(new Error(message), { code }, extra)
 	// A request that never got an answer has a status too: 'network'.
 	async function send(url, init) {
 		try {
@@ -112,11 +116,18 @@
 	let sentToken = null
 	// The page's answer to "are there edits nobody saved?" (watchUnsaved).
 	let pageUnsaved = null
+	// Where saves go once one has gone to a copy: that copy, { davUrl, name }.
+	// Null while saves go to the file itself.
+	let target = null
+	let copyNotice = ''
+	const saveUrl = () => (target ? target.davUrl : config.file.davUrl)
+	const saveName = () => (target ? target.name : config.file.name)
 
 	// The host's own line above the product: what the lock or the permissions
 	// mean for saving, and -- while bytes have nowhere to go -- the way out.
 	function render() {
-		out.notice = stranded ? (stranded.downloaded ? DOWNLOADED : STRANDED) : lockNotice
+		// Stranded bytes first, then where the saves now go, then the lock.
+		out.notice = stranded ? (stranded.downloaded ? DOWNLOADED : STRANDED) : (copyNotice || lockNotice)
 		document.getElementById('litecore-host-notice').textContent = out.notice
 		const button = document.getElementById('litecore-host-download')
 		button.hidden = !stranded
@@ -143,7 +154,12 @@
 		unsaved.id = 'litecore-host-unsaved'
 		unsaved.textContent = '尚未儲存'
 		unsaved.hidden = true
-		bar.prepend(title, unsaved)
+		// When the last save that reached a file was answered (SPEC-M3-autosave
+		// O2). Not a live region: it changes every autosave.
+		const saved = document.createElement('span')
+		saved.id = 'litecore-host-saved'
+		saved.hidden = true
+		bar.prepend(title, unsaved, saved)
 		const close = document.createElement('button')
 		close.type = 'button'
 		close.id = 'litecore-host-close'
@@ -161,6 +177,19 @@
 			}
 			unsaved.hidden = !(holding || stranded)
 		}, 500)
+	}
+
+	// The O2 label: the time the save that reached a file was answered, from
+	// the host's own record -- never from the page's `dirty`, which a save to a
+	// copy also clears.
+	function noteSaved(record, answeredAt) {
+		const label = document.getElementById('litecore-host-saved')
+		if (!label || typeof answeredAt !== 'number') return
+		const when = new Date(out.started + answeredAt)
+		const pad = (n) => String(n).padStart(2, '0')
+		label.textContent = `上次儲存：${pad(when.getHours())}:${pad(when.getMinutes())}${record.trigger === 'auto' ? '（自動）' : ''}`
+		label.hidden = false
+		out.lastSaved = { at: answeredAt, trigger: record.trigger, target: record.target }
 	}
 
 	// -- the lock (spec §3 O2, K1, C1)
@@ -365,10 +394,18 @@
 		const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
 		for (let attempt = 1; attempt <= 5; attempt++) {
 			const name = `${stem}（${label} ${stamp}${attempt > 1 ? `-${attempt}` : ''}）.odt`
-			const response = await send(folder + encodeURIComponent(name), {
+			const url = folder + encodeURIComponent(name)
+			const response = await send(url, {
 				method: 'PUT', body: bytes, headers: headers({ 'Content-Type': ODT, 'If-None-Match': '*' }),
 			})
-			if (response.ok) return { name, status: response.status }
+			// A write to the copy is a write too: the next one, into this copy,
+			// waits its second like any other (findings 103, 104).
+			lastAnswered = performance.now()
+			if (response.ok) {
+				let version = versionOf(response)
+				if (!version) version = versionOf(await send(url, { method: 'HEAD', headers: headers() }))
+				return { name, url, status: response.status, etag: version, respondedAt: Date.now() - out.started }
+			}
 			if (response.status !== 412) return { name, status: response.status, failed: true }
 		}
 		return { failed: true, status: 412 }
@@ -395,7 +432,7 @@
 			if (!etag) throw failure('HOST_LOAD_FAILED', '伺服器沒有給這個檔案的版本標記，無法安全存回。')
 			// The page opens view-only on this (study_LiteCore SPEC-M3-page-honesty).
 			out.handedReadOnly = !config.file.writable
-			return { bytes, name: config.file.name, readOnly: !config.file.writable }
+			return { bytes, name: config.file.name, readOnly: !config.file.writable, lockRefused: out.lock.state === 'refused' }
 		},
 
 		// The page asks here instead of registering its own beforeunload: this
@@ -408,12 +445,17 @@
 			publish()
 		},
 
-		async save(bytes, { name }) {
-			const record = { at: Date.now() - out.started, name, bytes: bytes.byteLength, attempts: [] }
+		// `trigger` and `conditions` come from the page (SPEC-M3-autosave §9.3):
+		// recorded, and the O2 label says （自動） for an autosave.
+		async save(bytes, { name, trigger, conditions } = {}) {
+			const record = { at: Date.now() - out.started, name, bytes: bytes.byteLength, attempts: [],
+				trigger: trigger === 'auto' ? 'auto' : 'manual' }
+			if (conditions) record.conditions = conditions
 			out.saves.push(record)
 			inFlight++
 			try {
 				await saveOnce(bytes, record)
+				return { name: saveName(), target: record.target }
 			} catch (error) {
 				// Every save ends one of three ways: the original written, a copy
 				// written, or the bytes kept here with leaving guarded -- the page
@@ -424,7 +466,7 @@
 				record.unexpected = `${error && error.name}: ${error && error.message}`
 				strand(bytes, record.sha256 || null)
 				record.outcome = 'stranded'
-				throw failure('HOST_SAVE_FAILED', '存回時發生未預期的錯誤：內容還在這個頁面裡，請按「下載這份內容」。')
+				throw failure('HOST_SAVE_FAILED', '存回時發生未預期的錯誤：內容還在這個頁面裡，請按「下載這份內容」。', { outcome: 'stranded' })
 			} finally {
 				// Everything this save will do is done, copy included.
 				inFlight--
@@ -459,7 +501,7 @@
 		}
 		attempt.waited = Math.round(performance.now() - waitFrom)
 		const check = { at: Date.now() - out.started }
-		const read = await send(config.file.davUrl, { cache: 'no-store', headers: headers() })
+		const read = await send(saveUrl(), { cache: 'no-store', headers: headers() })
 		check.status = read.status
 		if (read.ok) {
 			check.etag = versionOf(read)
@@ -472,7 +514,10 @@
 			}
 		}
 		check.ms = Date.now() - out.started - check.at
-		Object.assign(attempt, { check, ifMatch: etag, withToken: token !== null })
+		// A copy carries no lock: sending the file's token to it is a 412
+		// (Sabre checks every token in an If header), one more copy each time.
+		const withToken = token !== null && target === null
+		Object.assign(attempt, { check, ifMatch: etag, withToken, target: target ? target.name : 'original' })
 		if (check.sha256 && check.etag === etag && lastSha !== null && check.sha256 !== lastSha) {
 			attempt.status = 'changed'
 			publish()
@@ -480,9 +525,9 @@
 		}
 		attempt.at = Date.now() - out.started
 		const extra = { 'Content-Type': ODT, 'If-Match': etag }
-		if (token) extra.If = `(${token})`
-		sentToken = token
-		const response = await send(config.file.davUrl, { method: 'PUT', body: bytes, headers: headers(extra) })
+		if (withToken) extra.If = `(${token})`
+		sentToken = withToken ? token : null
+		const response = await send(saveUrl(), { method: 'PUT', body: bytes, headers: headers(extra) })
 		lastAnswered = performance.now()
 		attempt.respondedAt = Date.now() - out.started
 		attempt.status = response.status
@@ -526,8 +571,10 @@
 			}
 			etag = record.etag
 			lastSha = record.sha256
+			record.target = target ? target.name : 'original'
 			unstrand('saved')
 			record.outcome = 'saved'
+			noteSaved(record, record.attempts[record.attempts.length - 1].respondedAt)
 			return
 		}
 		const conflict = response.status === 412 || response.status === 423 || response.status === 'changed'
@@ -545,13 +592,26 @@
 		publish()
 		const code = conflict ? 'CONFLICT' : 'HOST_SAVE_FAILED'
 		if (!record.conflictCopy.failed) {
+			// From here on the session saves to this copy (O1 = B): its version
+			// and its bytes are what the next save is checked against.
+			const copy = record.conflictCopy
+			target = { davUrl: copy.url, name: copy.name }
+			etag = copy.etag || null
+			lastSha = record.sha256
+			record.target = copy.name
+			copyNotice = `${why}你的內容存在「${copy.name}」，之後的存檔都會存到這份。`
+			const title = document.getElementById('litecore-host-title')
+			if (title) title.textContent = copy.name
+			render()
 			unstrand('copy')
 			record.outcome = 'copy'
-			throw failure(code, `${why}你的內容另存為「${record.conflictCopy.name}」。`)
+			noteSaved(record, copy.respondedAt)
+			throw failure(code, `${why}你的內容另存為「${copy.name}」。`, { outcome: 'copy', savedAs: copy.name })
 		}
 		strand(bytes, record.sha256)
 		record.outcome = 'stranded'
-		throw failure(code, `${why}另存副本也失敗（${record.conflictCopy.status}）：內容還在這個頁面裡，請按「下載這份內容」。`)
+		throw failure(code, `${why}另存副本也失敗（${record.conflictCopy.status}）：內容還在這個頁面裡，請按「下載這份內容」。`,
+			{ outcome: 'stranded' })
 	}
 
 	async function run() {

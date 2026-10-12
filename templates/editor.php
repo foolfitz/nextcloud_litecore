@@ -25,6 +25,8 @@
 #litecore-host-title { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #litecore-host-unsaved { color: var(--color-text-maxcontrast, #6b7c8a); font-size: 12px; white-space: nowrap; }
 #litecore-host-unsaved[hidden] { display: none; }
+#litecore-host-saved { color: var(--color-text-maxcontrast, #6b7c8a); font-size: 12px; white-space: nowrap; }
+#litecore-host-saved[hidden] { display: none; }
 #litecore-host-close { font-size: 16px; line-height: 1; padding: 4px 10px; }
 /* Production UI (study_LiteCore specs/SPEC-M3-production-ui.md): the shipped
    page carries the developers' controls and read-outs. Hidden here, not taken
