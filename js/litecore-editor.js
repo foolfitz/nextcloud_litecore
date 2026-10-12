@@ -449,7 +449,7 @@
 		// recorded, and the O2 label says （自動） for an autosave.
 		async save(bytes, { name, trigger, conditions } = {}) {
 			const record = { at: Date.now() - out.started, name, bytes: bytes.byteLength, attempts: [],
-				trigger: trigger === 'auto' ? 'auto' : 'manual' }
+				trigger: trigger === 'auto' ? 'auto' : 'manual', target: target ? target.name : 'original' }
 			if (conditions) record.conditions = conditions
 			out.saves.push(record)
 			inFlight++
@@ -565,7 +565,7 @@
 			record.etag = versionOf(response)
 			if (!record.etag) {
 				// Without the new version the next save would be refused as a conflict.
-				const head = await send(config.file.davUrl, { method: 'HEAD', headers: headers() })
+				const head = await send(saveUrl(), { method: 'HEAD', headers: headers() })
 				record.etag = versionOf(head)
 				record.etagFrom = 'HEAD'
 			}
