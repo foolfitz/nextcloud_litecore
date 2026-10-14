@@ -49,8 +49,28 @@
 #litecore-editor-root #text,
 #litecore-editor-root [data-action="insert-text"],
 #litecore-editor-root .statusbar { display: none; }
+/* Finding 143 (host 0.2.21; the owner's ruling of 2026-10-14: the page number
+   looks like Collabora's). The page's own #page-status is 12 px muted text in
+   a 27 px strip, and with .statusbar hidden it was the root's last strip --
+   8 px of which sat under #content's clip (the root was calc(100vh - 50px),
+   #content is --body-height = 100vh - 50px - 8px). Here it is the editor's
+   status bar: the root's full width along its bottom edge, inside #content,
+   32 px tall, the page number its leftmost text in the host's own text size
+   and colour. `display` is set, so `hidden` is restated: the page hides the
+   element until the first page-rectangle answer and while no document is open.
+   Collabora draws the number as a badge and opens Go to Page on click; the
+   badge needs a span in the page markup and the click an action -- neither is
+   in this release (study_LiteCore findings/143, 裁決). */
+#litecore-editor-root #page-status {
+	display: flex; align-items: center; box-sizing: border-box;
+	width: 100%; min-height: 32px; padding: 0 12px; margin: 0;
+	font-size: 13px; line-height: 1.5; text-align: left;
+	color: var(--color-main-text); background: var(--color-main-background);
+	border-top: 1px solid var(--color-border);
+}
+#litecore-editor-root #page-status[hidden] { display: none; }
 </style>
-<div id="litecore-editor-root" style="display: flex; flex-direction: column; height: calc(100vh - 50px); width: 100%;">
+<div id="litecore-editor-root" style="display: flex; flex-direction: column; height: 100%; width: 100%;">
 <div id="litecore-host-bar" role="status" hidden><span id="litecore-host-notice"></span><button type="button" id="litecore-host-download" hidden>下載這份內容</button></div>
 <?php print_unescaped($_['body']); ?>
 </div>
