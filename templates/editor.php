@@ -69,6 +69,13 @@
 	border-top: 1px solid var(--color-border);
 }
 #litecore-editor-root #page-status[hidden] { display: none; }
+/* Finding 154 (host 0.2.26): Nextcloud's core/css/server.css resets
+   `article, aside, dialog, ... { display: block }`, an author rule that beats
+   the browser's own `dialog:not([open]) { display: none }`. On 0.2.25 the page's
+   closed Markdown dialog therefore sat over the editor's top left and took the
+   clicks meant for the document. Only the closed state is restated; an open
+   dialog keeps its own display (study_LiteCore findings/154, ruling 3). */
+#litecore-editor-root dialog:not([open]) { display: none; }
 </style>
 <div id="litecore-editor-root" style="display: flex; flex-direction: column; height: 100%; width: 100%;">
 <div id="litecore-host-bar" role="status" hidden><span id="litecore-host-notice"></span><button type="button" id="litecore-host-download" hidden>下載這份內容</button></div>
