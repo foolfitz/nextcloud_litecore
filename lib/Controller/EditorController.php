@@ -385,8 +385,12 @@ class EditorController extends Controller {
 		}
 		foreach (self::PAGES as $name => $page) {
 			$entry = $pages[$name] ?? null;
-			if (!is_array($entry) || ($entry['module'] ?? null) !== $page['module']
-				|| !isset($manifest['files'][$name]) || !isset($manifest['files'][substr($page['module'], 2)])) {
+			// The manifest names the module the way it keys files: by path, without
+			// the page's `./` (0.2.29 compared against the `./` form and refused its
+			// own package -- every route 500, SPEC-M4 Phase H run 1).
+			$module = substr($page['module'], 2);
+			if (!is_array($entry) || ($entry['module'] ?? null) !== $module
+				|| !isset($manifest['files'][$name]) || !isset($manifest['files'][$module])) {
 				return null;
 			}
 		}
