@@ -3,12 +3,13 @@
 	  xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
 	<id>litecore</id>
 	<name>LiteCore</name>
-	<summary>Open ODT files from Files in the LiteCore WebAssembly editor. M3 skeleton.</summary>
+	<summary>Open ODT files from Files in the LiteCore WebAssembly editor, and view ODS files read-only. M3 skeleton.</summary>
 	<description><![CDATA[M3 skeleton of study_LiteCore's Nextcloud app. The editor runs entirely in
 the browser (LibreOffice core compiled to WebAssembly); the server only serves
 files. Shape = M3 gate 0's E1h: a dedicated route under Nextcloud's header,
-cross-origin isolated, every engine script served with COEP by PHP.]]></description>
-	<version>0.2.28</version>
+cross-origin isolated, every engine script served with COEP by PHP. 0.2.29 adds a read-only
+spreadsheet viewer (SPEC-M4): an .ods opens on its own engine, nothing is written back.]]></description>
+	<version>0.2.29</version>
 	<licence>agpl</licence>
 	<author>study_LiteCore</author>
 	<namespace>LiteCore</namespace>

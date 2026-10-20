@@ -33,15 +33,21 @@ use OCP\Util;
  * script served with COEP (a static script from the app directory has no COEP
  * and the engine dies at boot -- E1).
  *
+ * Since 0.2.29 the same route serves two pages through a page table (PAGES;
+ * study_LiteCore specs/SPEC-M4-ods-in-nextcloud.md §3.4): the editor for an ODT
+ * and the read-only spreadsheet viewer for an ODS, each with its own engine in
+ * the same package.
+ *
  * The engine is the app's own `engine/` (study_LiteCore
- * specs/SPEC-M3-asset-delivery.md): every file of the editor's closure, as zstd
- * and as gzip, listed in `engine/MANIFEST.json`. All of it is served here, under
- * an address that carries the build id and a hash of how the files are served,
- * as packaged compressed bytes with Content-Encoding and a year's immutable
- * caching -- the one way the 115 MB wasm fits in either
- * browser's HTTP cache (sent as it is, Firefox never keeps it and Chrome keeps
- * it only on a roomy disk; step 0 of that spec). zstd first, where the request
- * takes it (specs/SPEC-M3-zstd.md): about a quarter fewer bytes than gzip.
+ * specs/SPEC-M3-asset-delivery.md): every file of both pages' closures, as zstd
+ * and as gzip, listed in `engine/MANIFEST.json` (schema litecore-engine/3). All
+ * of it is served here, under an address that carries the build id and a hash
+ * of how the files are served, as packaged compressed bytes with
+ * Content-Encoding and a year's immutable caching -- the one way the 115 MB
+ * wasm fits in either browser's HTTP cache (sent as it is, Firefox never keeps
+ * it and Chrome keeps it only on a roomy disk; step 0 of that spec). zstd
+ * first, where the request takes it (specs/SPEC-M3-zstd.md): about a quarter
+ * fewer bytes than gzip.
  *
  * This route never reads, parses or converts the document. It resolves the file
  * id to the user's own WebDAV URL; the browser fetches the bytes from Nextcloud's
@@ -49,10 +55,23 @@ use OCP\Util;
  */
 class EditorController extends Controller {
 	private const ODT = 'application/vnd.oasis.opendocument.text';
-	// The shipped page's one module script. Removed from the re-wrapped body and
-	// imported by js/litecore-editor.js instead: that script carries Nextcloud's
-	// CSP nonce, so strict-dynamic admits the module graph it loads.
-	private const PRODUCT_SCRIPT = '<script type="module" src="./e2-editor-app.js"></script>';
+	private const ODS = 'application/vnd.oasis.opendocument.spreadsheet';
+	private const ENGINE_SCHEMA = 'litecore-engine/3';
+	/**
+	 * The page table (SPEC-M4 §3.4): per shipped page, the one module script it
+	 * carries (removed from the re-wrapped body and imported by the host script
+	 * instead -- that script carries Nextcloud's CSP nonce, so strict-dynamic
+	 * admits the module graph it loads), the ONE mime its route resolves, its
+	 * template and its host script. A file of the other mime is refused on the
+	 * wrong route: the viewer never shows a text document as sheets, the editor
+	 * never opens a spreadsheet.
+	 */
+	private const PAGES = [
+		'e2-editor.html' => ['module' => './e2-editor-app.js', 'mime' => self::ODT, 'kind' => 'ODT',
+			'template' => 'editor', 'hostScript' => 'litecore-editor'],
+		'ods-viewer.html' => ['module' => './ods-viewer-app.js', 'mime' => self::ODS, 'kind' => 'ODS',
+			'template' => 'viewer', 'hostScript' => 'litecore-viewer'],
+	];
 
 	public function __construct(
 		string $appName,
@@ -88,12 +107,13 @@ class EditorController extends Controller {
 	];
 
 	/**
-	 * `r/e2-editor.html?fileId=N` is what Files links to: it sends the browser to
-	 * this build's address. `r/<address>/<path>` is the editor document and every
-	 * file it loads -- the page's relative URLs (its modules, the worker, what the
-	 * worker fetches) all land under the same address. The redirect names
-	 * index.php outright, so no request depends on how a web server falls back
-	 * for a path that is not a file on disk.
+	 * `r/<page>?fileId=N` is what Files links to (`e2-editor.html` for an ODT,
+	 * `ods-viewer.html` for an ODS): it sends the browser to this build's address.
+	 * `r/<address>/<path>` is the page document and every file it loads -- the
+	 * page's relative URLs (its modules, the worker, what the worker fetches) all
+	 * land under the same address. The redirect names index.php outright, so no
+	 * request depends on how a web server falls back for a path that is not a
+	 * file on disk.
 	 */
 	#[NoAdminRequired]
 	#[NoCSRFRequired]
@@ -105,10 +125,11 @@ class EditorController extends Controller {
 		}
 		$engine = $this->engine();
 		if ($engine === null) {
-			return new DataDisplayResponse('the engine is not packaged (engine/MANIFEST.json)', Http::STATUS_INTERNAL_SERVER_ERROR);
+			return new DataDisplayResponse('the engine is not packaged for this host (engine/MANIFEST.json: '
+				. self::ENGINE_SCHEMA . ' with both pages)', Http::STATUS_INTERNAL_SERVER_ERROR);
 		}
-		if ($path === 'e2-editor.html') {
-			return new RedirectResponse($this->editorUrl($engine, $fileId));
+		if (isset(self::PAGES[$path])) {
+			return new RedirectResponse($this->pageUrl($engine, $path, $fileId));
 		}
 		$parts = explode('/', $path, 2);
 		if (count($parts) !== 2) {
@@ -117,15 +138,15 @@ class EditorController extends Controller {
 		if ($parts[0] !== $this->address($engine)) {
 			// An address from before an upgrade (a reload, a history entry, a restored
 			// session): the document goes to the current one; the old files are gone.
-			return $parts[1] === 'e2-editor.html'
-				? new RedirectResponse($this->editorUrl($engine, $fileId))
+			return isset(self::PAGES[$parts[1]])
+				? new RedirectResponse($this->pageUrl($engine, $parts[1], $fileId))
 				: new NotFoundResponse();
 		}
 		if (!isset($engine['files'][$parts[1]])) {
 			return new NotFoundResponse();
 		}
-		if ($parts[1] === 'e2-editor.html') {
-			return $this->editor($fileId);
+		if (isset(self::PAGES[$parts[1]])) {
+			return $this->page($parts[1], $fileId);
 		}
 		return $this->serve($parts[1], $engine['files'][$parts[1]]);
 	}
@@ -135,32 +156,36 @@ class EditorController extends Controller {
 		return $engine['buildId'] . '-' . substr(hash('sha256', (string)json_encode(self::SERVE_POLICY)), 0, 8);
 	}
 
-	private function editorUrl(array $engine, int $fileId): string {
+	private function pageUrl(array $engine, string $page, int $fileId): string {
 		// getWebroot(), not linkTo('', 'index.php'): with pretty URLs on, the latter
 		// is "/", and "/" . "/apps/..." is a scheme-relative URL to a host named apps.
 		return $this->urls->getWebroot() . '/index.php/apps/' . Application::APP_ID
-			. '/r/' . $this->address($engine) . '/e2-editor.html?fileId=' . $fileId;
+			. '/r/' . $this->address($engine) . '/' . $page . '?fileId=' . $fileId;
 	}
 
-	private function editor(int $fileId): Response {
-		$target = $this->resolve($fileId);
+	/** The page document: the shipped page re-wrapped under Nextcloud's header. */
+	private function page(string $name, int $fileId): Response {
+		$page = self::PAGES[$name];
+		$target = $this->resolve($fileId, $page['mime'], $page['kind']);
 		if (is_string($target)) {
 			return new DataDisplayResponse($target, Http::STATUS_NOT_FOUND, ['Content-Type' => 'text/plain; charset=utf-8']);
 		}
-		$html = (string)gzdecode((string)file_get_contents($this->packed('e2-editor.html', '.gz')));
+		$html = (string)gzdecode((string)file_get_contents($this->packed($name, '.gz')));
+		$script = '<script type="module" src="' . $page['module'] . '"></script>';
 		if (!preg_match('#<style>(.*?)</style>#s', $html, $style) || !preg_match('#<body>(.*)</body>#s', $html, $body)
-			|| substr_count($body[1], self::PRODUCT_SCRIPT) !== 1) {
+			|| substr_count($body[1], $script) !== 1) {
 			return new DataDisplayResponse('the shipped page no longer has the shape this app re-wraps', Http::STATUS_INTERNAL_SERVER_ERROR);
 		}
 		$scoped = $this->scopedStyle($style[1]);
 		if ($scoped === null) {
 			return new DataDisplayResponse('the shipped page\'s style no longer has the shape this app scopes', Http::STATUS_INTERNAL_SERVER_ERROR);
 		}
-		$this->initialState->provideInitialState('config', [
+		$source = ['module' => $page['module'], 'sourceSha256' => hash('sha256', $html)];
+		$config = [
 			'user' => $this->userSession->getUser()?->getUID(),
 			'userDisplayName' => $this->userSession->getUser()?->getDisplayName(),
 			'file' => $target,
-			'editor' => ['module' => './e2-editor-app.js', 'sourceSha256' => hash('sha256', $html)],
+			'page' => ['name' => $name] + $source,
 			// Where the close button goes: the file's folder in Files, the file
 			// highlighted, not opened again -- the route Files' own showFile()
 			// redirects to, without its `openfile`. Built by the router, not by
@@ -168,12 +193,17 @@ class EditorController extends Controller {
 			// on `/apps/files/index.php/apps/files/...`.
 			'filesUrl' => $this->urls->linkToRoute('files.view.indexViewFileid',
 				['view' => 'files', 'fileid' => $target['id'], 'dir' => $target['dir']]),
-		]);
-		Util::addScript(Application::APP_ID, 'litecore-editor');
-		$response = new TemplateResponse(Application::APP_ID, 'editor', [
+		];
+		if ($page['template'] === 'editor') {
+			// js/litecore-editor.js reads `editor.module` (0.2.28 and before).
+			$config['editor'] = $source;
+		}
+		$this->initialState->provideInitialState('config', $config);
+		Util::addScript(Application::APP_ID, $page['hostScript']);
+		$response = new TemplateResponse(Application::APP_ID, $page['template'], [
 			'style' => $scoped,
 			'unscoped' => $style[1],
-			'body' => str_replace(self::PRODUCT_SCRIPT, '', $body[1]),
+			'body' => str_replace($script, '', $body[1]),
 		], 'user');
 		$policy = new ContentSecurityPolicy();
 		$policy->allowEvalWasm(true);
@@ -184,15 +214,16 @@ class EditorController extends Controller {
 	}
 
 	/**
-	 * The shipped page's stylesheet, confined to the editor's container
+	 * The shipped page's stylesheet, confined to the page's container
 	 * (study_LiteCore finding 110). Printed as it was, its `body` rule replaced
 	 * Nextcloud's themed background -- the header's white icons ended up on light
 	 * grey -- and its `button`/`select`/`input` rules restyled Nextcloud's own
-	 * controls. Wrapped in `@scope (#litecore-editor-root)` (templates/editor.php)
-	 * every selector matches only inside the container; the page's two
-	 * document-level rules, `:root` (its colours) and `body` (its column layout),
-	 * become `:scope`, the container itself. Exactly one of each, at the start of
-	 * a rule, or the page has changed shape and this refuses rather than guess.
+	 * controls. Wrapped in `@scope (#litecore-…-root)` (the templates) every
+	 * selector matches only inside the container; the page's two document-level
+	 * rules, `:root` (its colours) and `body` (its column layout), become
+	 * `:scope`, the container itself. Exactly one of each, at the start of a
+	 * rule, or the page has changed shape and this refuses rather than guess
+	 * (SPEC-M4 review C2: a second `:root` is a 500, not a guess).
 	 */
 	private function scopedStyle(string $css): ?string {
 		foreach ([':root', 'body'] as $selector) {
@@ -214,13 +245,15 @@ class EditorController extends Controller {
 	/**
 	 * The file as the current user sees it, or why not. Only the user's own
 	 * folder: shares received are in it, public links are not (out of scope).
+	 * Only the page's own mime: the editor route resolves ODT, the viewer route ODS.
 	 *
-	 * `writable` decides whether the host takes a lock at all: a read-only share
-	 * answers every PUT with 403, so there is nothing a lock would protect.
+	 * `writable` decides whether the editor's host takes a lock at all: a
+	 * read-only share answers every PUT with 403, so there is nothing a lock
+	 * would protect. The viewer's host never takes one.
 	 *
 	 * @return array{id: int, name: string, dir: string, size: int, etag: string, writable: bool, davUrl: string}|string
 	 */
-	private function resolve(int $fileId): array|string {
+	private function resolve(int $fileId, string $mime, string $kind): array|string {
 		$user = $this->userSession->getUser();
 		if ($user === null || $fileId <= 0) {
 			return 'no such file';
@@ -230,8 +263,8 @@ class EditorController extends Controller {
 		if (!$node instanceof File || !$node->isReadable()) {
 			return 'no such file';
 		}
-		if ($node->getMimetype() !== self::ODT) {
-			return 'not an ODT file';
+		if ($node->getMimetype() !== $mime) {
+			return 'not an ' . $kind . ' file';
 		}
 		$relative = (string)$folder->getRelativePath($node->getPath());
 		$segments = array_map('rawurlencode', explode('/', ltrim($relative, '/')));
@@ -334,13 +367,28 @@ class EditorController extends Controller {
 	}
 
 	/**
+	 * The manifest, or null when it is not one this host serves: schema 3, a
+	 * build id, files, and a page table naming every page of PAGES with its
+	 * module, both packaged (the packager's validate_manifest() says the same).
+	 *
 	 * @return array{buildId: string, files: array<string, array{bytes: int, sha256: string, gzBytes: int, gzSha256: string, zstBytes: int, zstSha256: string}>}|null
 	 */
 	private function engine(): ?array {
 		$manifest = json_decode((string)@file_get_contents($this->engineDir() . '/MANIFEST.json'), true);
-		if (!is_array($manifest) || ($manifest['schema'] ?? null) !== 'litecore-engine/2'
+		if (!is_array($manifest) || ($manifest['schema'] ?? null) !== self::ENGINE_SCHEMA
 			|| !is_string($manifest['buildId'] ?? null) || !is_array($manifest['files'] ?? null)) {
 			return null;
+		}
+		$pages = $manifest['source']['pages'] ?? null;
+		if (!is_array($pages)) {
+			return null;
+		}
+		foreach (self::PAGES as $name => $page) {
+			$entry = $pages[$name] ?? null;
+			if (!is_array($entry) || ($entry['module'] ?? null) !== $page['module']
+				|| !isset($manifest['files'][$name]) || !isset($manifest['files'][substr($page['module'], 2)])) {
+				return null;
+			}
 		}
 		return $manifest;
 	}
