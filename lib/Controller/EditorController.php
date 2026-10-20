@@ -226,15 +226,26 @@ class EditorController extends Controller {
 	 * (SPEC-M4 review C2: a second `:root` is a 500, not a guess).
 	 */
 	private function scopedStyle(string $css): ?string {
+		// Comments carry no rules: the count is taken without them (a selector quoted
+		// in a comment is not a rule), and a comment may sit between a rule's end and
+		// the next selector -- the viewer page explains its one `:root` rule in a
+		// comment right above it, and 0.2.30's anchored replacement, which allowed
+		// only whitespace there, refused that page (study_LiteCore finding 162). The
+		// output is unchanged for a stylesheet the old form accepted.
+		$bare = preg_replace('#/\*.*?\*/#s', '', $css);
+		if ($bare === null) {
+			return null;
+		}
 		foreach ([':root', 'body'] as $selector) {
 			// Every occurrence, anywhere (study_LiteCore review 2026-10-06 item 9): a
 			// rule nested in an at-rule (`@media … { :root {`) is not at the start of a
 			// rule, and the anchored replacement below would leave it unrewritten
 			// rather than refuse.
-			if (preg_match_all('/(?<![\w-])' . preg_quote($selector, '/') . '\s*\{/', $css) !== 1) {
+			if (preg_match_all('/(?<![\w-])' . preg_quote($selector, '/') . '\s*\{/', $bare) !== 1) {
 				return null;
 			}
-			$css = preg_replace('/(^|\})(\s*)' . preg_quote($selector, '/') . '(\s*)\{/', '$1$2:scope$3{', $css, -1, $count);
+			$css = preg_replace('/(^|\})((?:\s|\/\*.*?\*\/)*)' . preg_quote($selector, '/') . '(\s*)\{/s',
+				'$1$2:scope$3{', $css, -1, $count);
 			if ($css === null || $count !== 1) {
 				return null;
 			}
