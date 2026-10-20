@@ -76,6 +76,13 @@
    clicks meant for the document. Only the closed state is restated; an open
    dialog keeps its own display (study_LiteCore findings/154, ruling 3). */
 #litecore-editor-root dialog:not([open]) { display: none; }
+/* Finding 155 (host 0.2.28): the same reset sets `dialog { margin: 0 }`, an
+   author rule that beats the browser's own `margin: auto`. A modal dialog is
+   `position: fixed; inset: 0`, so on 0.2.27 the open Markdown dialog sat at the
+   viewport's top left. The open state gets its centring back; the page already
+   sets the dialog's padding and border itself (study_LiteCore findings/155,
+   ruling 5 item 19). */
+#litecore-editor-root dialog[open] { margin: auto; }
 </style>
 <div id="litecore-editor-root" style="display: flex; flex-direction: column; height: 100%; width: 100%;">
 <div id="litecore-host-bar" role="status" hidden><span id="litecore-host-notice"></span><button type="button" id="litecore-host-download" hidden>下載這份內容</button></div>
