@@ -148,7 +148,7 @@ class EditorController extends Controller {
 			return new NotFoundResponse();
 		}
 		if (isset(self::PAGES[$parts[1]])) {
-			return $this->page($parts[1], $fileId);
+			return $this->page($parts[1], $fileId, $engine);
 		}
 		return $this->serve($parts[1], $engine['files'][$parts[1]]);
 	}
@@ -166,11 +166,16 @@ class EditorController extends Controller {
 	}
 
 	/** The page document: the shipped page re-wrapped under Nextcloud's header. */
-	private function page(string $name, int $fileId): Response {
+	private function page(string $name, int $fileId, array $engine): Response {
 		$page = self::PAGES[$name];
 		$target = $this->resolve($fileId, $page['mime'], $page['kind']);
 		if (is_string($target)) {
 			return new DataDisplayResponse($target, Http::STATUS_NOT_FOUND, ['Content-Type' => 'text/plain; charset=utf-8']);
+		}
+		// Files can advertise UPDATE on a shared mount although its file is read-only.
+		// The resolved server-side permission decides which spreadsheet page to serve.
+		if ($name === 'ods-editor.html' && !$target['writable']) {
+			return new RedirectResponse($this->pageUrl($engine, 'ods-viewer.html', $fileId));
 		}
 		$html = (string)gzdecode((string)file_get_contents($this->packed($name, '.gz')));
 		$script = '<script type="module" src="' . $page['module'] . '"></script>';
