@@ -71,6 +71,8 @@ class EditorController extends Controller {
 			'template' => 'editor', 'hostScript' => 'litecore-editor'],
 		'ods-viewer.html' => ['module' => './ods-viewer-app.js', 'mime' => self::ODS, 'kind' => 'ODS',
 			'template' => 'viewer', 'hostScript' => 'litecore-viewer'],
+		'ods-editor.html' => ['module' => './ods-editor-app.js', 'mime' => self::ODS, 'kind' => 'ODS',
+			'template' => 'editor', 'hostScript' => 'litecore-editor'],
 	];
 
 	public function __construct(
