@@ -21,8 +21,11 @@ registerFileAction({
 	enabled: ({ nodes }) => nodes.length === 1 && Object.hasOwn(PAGES, nodes[0].mime)
 		&& (nodes[0].permissions & Permission.READ) !== 0,
 	async exec({ nodes }) {
+		const node = nodes[0]
+		const page = node.mime === ODS && (node.permissions & Permission.UPDATE) !== 0
+			? 'ods-editor.html' : PAGES[node.mime]
 		window.location.assign(generateUrl('/apps/litecore/r/{page}?fileId={fileId}',
-			{ page: PAGES[nodes[0].mime], fileId: nodes[0].fileid }))
+			{ page, fileId: node.fileid }))
 		return null
 	},
 	default: DefaultType.DEFAULT,
