@@ -9,7 +9,7 @@ the browser (LibreOffice core compiled to WebAssembly); the server only serves
 files. Shape = M3 gate 0's E1h: a dedicated route under Nextcloud's header,
 cross-origin isolated, every engine script served with COEP by PHP. 0.2.29 adds a read-only
 spreadsheet viewer (SPEC-M4): an .ods opens on its own engine, nothing is written back.]]></description>
-	<version>0.2.34</version>
+	<version>0.2.35</version>
 	<licence>agpl</licence>
 	<author>study_LiteCore</author>
 	<namespace>LiteCore</namespace>
