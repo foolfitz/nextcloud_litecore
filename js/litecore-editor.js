@@ -42,6 +42,12 @@
 	'use strict'
 
 	const ODT = 'application/vnd.oasis.opendocument.text'
+	const ODS = 'application/vnd.oasis.opendocument.spreadsheet'
+	function documentFormat() {
+		return config?.page?.name === 'ods-editor.html'
+			? { mime: ODS, extension: '.ods' }
+			: { mime: ODT, extension: '.odt' }
+	}
 	const LOCK_SECONDS = 300
 	const REFRESH_MS = 60000
 	// Only these say the lock is gone or someone else has it; anything else
@@ -368,7 +374,7 @@
 	// The bytes and the guard stay: a cancelled "Save as" must not lose them.
 	function download() {
 		if (!stranded) return
-		const url = URL.createObjectURL(new Blob([stranded.bytes], { type: ODT }))
+		const url = URL.createObjectURL(new Blob([stranded.bytes], { type: documentFormat().mime }))
 		const link = document.createElement('a')
 		link.href = url
 		link.download = config.file.name
@@ -388,15 +394,16 @@
 	async function saveCopy(bytes, label) {
 		const slash = config.file.davUrl.lastIndexOf('/')
 		const folder = config.file.davUrl.slice(0, slash + 1)
-		const stem = config.file.name.replace(/\.odt$/i, '')
+		const format = documentFormat()
+		const stem = config.file.name.replace(/\.(?:odt|ods)$/i, '')
 		const now = new Date()
 		const pad = (n) => String(n).padStart(2, '0')
 		const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
 		for (let attempt = 1; attempt <= 5; attempt++) {
-			const name = `${stem}（${label} ${stamp}${attempt > 1 ? `-${attempt}` : ''}）.odt`
+			const name = `${stem}（${label} ${stamp}${attempt > 1 ? `-${attempt}` : ''}）${format.extension}`
 			const url = folder + encodeURIComponent(name)
 			const response = await send(url, {
-				method: 'PUT', body: bytes, headers: headers({ 'Content-Type': ODT, 'If-None-Match': '*' }),
+				method: 'PUT', body: bytes, headers: headers({ 'Content-Type': format.mime, 'If-None-Match': '*' }),
 			})
 			// A write to the copy is a write too: the next one, into this copy,
 			// waits its second like any other (findings 103, 104).
@@ -524,7 +531,7 @@
 			return { ok: false, status: 'changed', headers: new Headers() }
 		}
 		attempt.at = Date.now() - out.started
-		const extra = { 'Content-Type': ODT, 'If-Match': etag }
+		const extra = { 'Content-Type': documentFormat().mime, 'If-Match': etag }
 		if (withToken) extra.If = `(${token})`
 		sentToken = withToken ? token : null
 		const response = await send(saveUrl(), { method: 'PUT', body: bytes, headers: headers(extra) })
