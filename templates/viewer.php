@@ -17,7 +17,7 @@
 <style>
 /* The host's own bar: the file's name and a way back to Files. Read-only, so
    nothing about saving (study_LiteCore SPEC-M4-ods-in-nextcloud §3.4). */
-#litecore-viewer-bar { display: flex; gap: 12px; align-items: center; padding: 6px 12px; font-size: 14px;
+#litecore-viewer-bar { display: flex; gap: 12px; align-items: center; padding: 6px 14px; font-size: 14px;
 	border-bottom: 1px solid var(--color-border, #ddd); }
 #litecore-host-title { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #litecore-host-readonly { color: var(--color-text-maxcontrast, #6b7c8a); font-size: 12px; white-space: nowrap; }
