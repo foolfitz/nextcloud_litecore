@@ -37,6 +37,7 @@ use Psr\Log\LoggerInterface;
  */
 class FileCreatedFromTemplateListener implements IEventListener {
 	private const ODT = 'application/vnd.oasis.opendocument.text';
+	private const ODS = 'application/vnd.oasis.opendocument.spreadsheet';
 
 	public function __construct(
 		private IUserSession $userSession,
@@ -51,7 +52,9 @@ class FileCreatedFromTemplateListener implements IEventListener {
 			return;
 		}
 		$target = $event->getTarget();
-		if ($target->getMimeType() !== self::ODT && strtolower($target->getExtension()) !== 'odt') {
+		$extension = strtolower($target->getExtension());
+		$spreadsheet = $target->getMimeType() === self::ODS || $extension === 'ods';
+		if (!$spreadsheet && $target->getMimeType() !== self::ODT && $extension !== 'odt') {
 			return;
 		}
 		if ($event->getTemplate() !== null) {
@@ -62,9 +65,9 @@ class FileCreatedFromTemplateListener implements IEventListener {
 		$user = $this->userSession->getUser();
 		$language = $this->l10nFactory->getUserLanguage($user);
 		$locale = $this->explicitLocale($user);
-		$choice = BlankDocument::choose($language, $locale);
+		$choice = $spreadsheet ? BlankDocument::chooseSpreadsheet($language, $locale) : BlankDocument::choose($language, $locale);
 		try {
-			$bytes = BlankDocument::read($choice['file']);
+			$bytes = BlankDocument::read($choice['file'], $spreadsheet ? BlankDocument::DIR_ODS : BlankDocument::DIR);
 			$target->putContent($bytes);
 			$size = $target->getSize();
 			if ($size !== strlen($bytes)) {

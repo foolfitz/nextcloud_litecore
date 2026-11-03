@@ -1,0 +1,430 @@
+{
+ "files": {
+  "de-DE_zh-TW_A4.ods": {
+   "asian": "zh-TW",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "bdc8a88739e715214317a050c9650ec2be228ecee36bf6846168fc67d3a3bb76",
+   "sheet": "Sheet1",
+   "western": "de-DE"
+  },
+  "de-DE_zh-TW_Letter.ods": {
+   "asian": "zh-TW",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "4e88db22db1da2f5e3d62580a6f9833763d48d7793fce77ebc0ee41fe2b9c1e7",
+   "sheet": "Sheet1",
+   "western": "de-DE"
+  },
+  "en-GB_zh-TW_A4.ods": {
+   "asian": "zh-TW",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "8d5b882828c944a913feeb3758188f269eb9e84f7e245d2aa0de40215abfa392",
+   "sheet": "Sheet1",
+   "western": "en-GB"
+  },
+  "en-GB_zh-TW_Letter.ods": {
+   "asian": "zh-TW",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "fe23dc37866fd5579eec92bfe9bf94b0baf3caf8d1e76ef5ac35a24ee60040c7",
+   "sheet": "Sheet1",
+   "western": "en-GB"
+  },
+  "en-US_ja-JP_A4.ods": {
+   "asian": "ja-JP",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK JP",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "fa7c43b4a79b1bbcc2cd12992ea77ce95ec4370b812c6d355c4c153338a47815",
+   "sheet": "Sheet1",
+   "western": "en-US"
+  },
+  "en-US_ja-JP_Letter.ods": {
+   "asian": "ja-JP",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK JP",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "5231a80a86af190521d1cb97484f7d277401890705c50497fbfe9a2ff6864674",
+   "sheet": "Sheet1",
+   "western": "en-US"
+  },
+  "en-US_ko-KR_A4.ods": {
+   "asian": "ko-KR",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK KR",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "9ae64bded04650bb66aa36c0a5d44c4c88c58fbcadb7e6fc66f299727769c536",
+   "sheet": "Sheet1",
+   "western": "en-US"
+  },
+  "en-US_ko-KR_Letter.ods": {
+   "asian": "ko-KR",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK KR",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "1baf24f2f7f8bb1de1c22c9d58a1ed0f9785552654f8b4ea25404e913f186279",
+   "sheet": "Sheet1",
+   "western": "en-US"
+  },
+  "en-US_zh-CN_A4.ods": {
+   "asian": "zh-CN",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK SC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "92ad5d210e1999714aad50bfefc8b73a85e2321790b71595aab29e296800f4ad",
+   "sheet": "Sheet1",
+   "western": "en-US"
+  },
+  "en-US_zh-CN_Letter.ods": {
+   "asian": "zh-CN",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK SC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "06fd60d1edc4fb6fc760f1a20c6ecce88dee1012cbcaf2a92389eaff126e951e",
+   "sheet": "Sheet1",
+   "western": "en-US"
+  },
+  "en-US_zh-HK_A4.ods": {
+   "asian": "zh-HK",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK HK",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "34623318b90ae1851628cf6fc0284605084e8fe3393996cd9a7716bcb9056fc4",
+   "sheet": "Sheet1",
+   "western": "en-US"
+  },
+  "en-US_zh-HK_Letter.ods": {
+   "asian": "zh-HK",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK HK",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "6a4474ee8d6b97f7125a26b5c127f6852464394aa22955225d3c98306d965463",
+   "sheet": "Sheet1",
+   "western": "en-US"
+  },
+  "en-US_zh-TW_A4.ods": {
+   "asian": "zh-TW",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "ef328572b62f0837f5d4c61dd1170e2ce4f7e99124bafdaef80b1656e4b5bb3d",
+   "sheet": "Sheet1",
+   "western": "en-US"
+  },
+  "en-US_zh-TW_Letter.ods": {
+   "asian": "zh-TW",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "5d8a79eae97eb285f1f0c2abbeb0e70ce09cdd2551891274614c3db03dc5154d",
+   "sheet": "Sheet1",
+   "western": "en-US"
+  },
+  "es-EC_zh-TW_A4.ods": {
+   "asian": "zh-TW",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "1de2ec4936a824cd460822070271e5ca7055ebc2a8038278f22dbb1a3c4daefc",
+   "sheet": "Sheet1",
+   "western": "es-EC"
+  },
+  "es-EC_zh-TW_Letter.ods": {
+   "asian": "zh-TW",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "5ccf51c2b1042ec04efb278f9a13fecfcc3b3558831c5d5d287faaf27a183ba6",
+   "sheet": "Sheet1",
+   "western": "es-EC"
+  },
+  "es-ES_zh-TW_A4.ods": {
+   "asian": "zh-TW",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "dcb1215b2922dff12135b53118fe1977623e5cb1e3b302f75714ee570e05be7e",
+   "sheet": "Sheet1",
+   "western": "es-ES"
+  },
+  "es-ES_zh-TW_Letter.ods": {
+   "asian": "zh-TW",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "31d02e2be24fbe54afeda0a73cc075aa95f2aa45bba1a5af948370c8a4a377f2",
+   "sheet": "Sheet1",
+   "western": "es-ES"
+  },
+  "es-MX_zh-TW_A4.ods": {
+   "asian": "zh-TW",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "52b938133d6ace00ccd4d73d3d9060918d9542f8542764a9ec73c6c034b02df9",
+   "sheet": "Sheet1",
+   "western": "es-MX"
+  },
+  "es-MX_zh-TW_Letter.ods": {
+   "asian": "zh-TW",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "dbe858fd999bf9298c4435c3f724b31cc1f6106f16c30b0540af90efe58df2b9",
+   "sheet": "Sheet1",
+   "western": "es-MX"
+  },
+  "fr-FR_zh-TW_A4.ods": {
+   "asian": "zh-TW",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "48a08206a4d0b1adb527a24d543b35567930f467b918ca90c84ad16862263d21",
+   "sheet": "Sheet1",
+   "western": "fr-FR"
+  },
+  "fr-FR_zh-TW_Letter.ods": {
+   "asian": "zh-TW",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "6ded540a0fb89e06991d91e7ffe0540ef20d2dfde7149e11f82f5ef2bf1e1b46",
+   "sheet": "Sheet1",
+   "western": "fr-FR"
+  },
+  "it-IT_zh-TW_A4.ods": {
+   "asian": "zh-TW",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "d85e0321a7de5eb7c676d8d09f7c5e50cc3aca6736bff6b509c9be6891ea856e",
+   "sheet": "Sheet1",
+   "western": "it-IT"
+  },
+  "it-IT_zh-TW_Letter.ods": {
+   "asian": "zh-TW",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "fcc4e706b3f9eb69085d012baa9745063a89065f98925ad7cac7a8caef079e4b",
+   "sheet": "Sheet1",
+   "western": "it-IT"
+  },
+  "nl-NL_zh-TW_A4.ods": {
+   "asian": "zh-TW",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "9c5bbb11cd53242ee5a49e6ce872dbc2fdb87624cfd794edf5044e9c727e4394",
+   "sheet": "Sheet1",
+   "western": "nl-NL"
+  },
+  "nl-NL_zh-TW_Letter.ods": {
+   "asian": "zh-TW",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "d047cb44849d37df011bf7ab6f0efa9450fffca2cd1f30745fca928570a73cd6",
+   "sheet": "Sheet1",
+   "western": "nl-NL"
+  },
+  "pt-BR_zh-TW_A4.ods": {
+   "asian": "zh-TW",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "5b7527feee1c019fa30e8847d542bb66d5ba4c2022a21b4c18b8993a129f5aa9",
+   "sheet": "Sheet1",
+   "western": "pt-BR"
+  },
+  "pt-BR_zh-TW_Letter.ods": {
+   "asian": "zh-TW",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "887d1ba5c77ae9a6f278da3e39ca1f0e3c968834c37cf1a44e8965366e616038",
+   "sheet": "Sheet1",
+   "western": "pt-BR"
+  },
+  "pt-PT_zh-TW_A4.ods": {
+   "asian": "zh-TW",
+   "bytes": 4036,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "A4",
+   "sha256": "ac112c87da0e5c7608361fdd91b4198783fe946cda168041250cc00a07a2a9f7",
+   "sheet": "Sheet1",
+   "western": "pt-PT"
+  },
+  "pt-PT_zh-TW_Letter.ods": {
+   "asian": "zh-TW",
+   "bytes": 4035,
+   "complex": "hi-IN",
+   "fonts": {
+    "asian": "Noto Sans CJK TC",
+    "complex": "Liberation Sans",
+    "western": "Liberation Sans"
+   },
+   "paper": "Letter",
+   "sha256": "f1656f2617bfff2eed57c53b54617680d88a5a33ecb4328afb50b938fbadb4af",
+   "sheet": "Sheet1",
+   "western": "pt-PT"
+  }
+ },
+ "generator": {
+  "path": "wasm_sdk_probe/tools/make_new_spreadsheet_templates.py",
+  "sha256": "caeebc34c6ff116cc0308e4e3510948beff8959f94cb84d2bf23433f624dc1fc"
+ },
+ "odfVersion": "1.3",
+ "spec": "specs/SPEC-P-demo-batch-6.md"
+}

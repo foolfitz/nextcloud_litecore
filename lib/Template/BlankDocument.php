@@ -20,6 +20,8 @@ namespace OCA\LiteCore\Template;
  */
 final class BlankDocument {
 	public const DIR = __DIR__ . '/../../blank';
+	/** The blank spreadsheets, their own manifest (study_LiteCore specs/SPEC-P-demo-batch-6.md 1.1, make_new_spreadsheet_templates.py). */
+	public const DIR_ODS = __DIR__ . '/../../blank-ods';
 
 	/** Nextcloud language -> the western tag the blank document states. */
 	public const WESTERN = [
@@ -66,6 +68,18 @@ final class BlankDocument {
 		];
 	}
 
+	/**
+	 * The blank spreadsheet for a user: the same triple as choose(), the .ods of it.  choose() is left as it is, because the
+	 * new-document runners read it as their truth source.
+	 *
+	 * @return array{western: string, asian: string, paper: string, file: string, country: ?string, countryFrom: ?string}
+	 */
+	public static function chooseSpreadsheet(string $language, ?string $locale): array {
+		$choice = self::choose($language, $locale);
+		$choice['file'] = "{$choice['western']}_{$choice['asian']}_{$choice['paper']}.ods";
+		return $choice;
+	}
+
 	/** The country segment of a tag such as en_US, zh_Hant_TW or en-GB; null when it has none (en, zh, es_419). */
 	public static function country(?string $tag): ?string {
 		if ($tag === null || $tag === '') {
@@ -80,8 +94,8 @@ final class BlankDocument {
 	}
 
 	/** @return array{files: array<string, array{sha256: string, bytes: int}>} */
-	public static function manifest(): array {
-		$path = self::DIR . '/MANIFEST.json';
+	public static function manifest(string $dir = self::DIR): array {
+		$path = $dir . '/MANIFEST.json';
 		$raw = @file_get_contents($path);
 		if ($raw === false || $raw === '') {
 			throw new \RuntimeException("blank documents: $path is missing or empty");
@@ -94,12 +108,12 @@ final class BlankDocument {
 	}
 
 	/** The bytes of one blank document, verified against MANIFEST.json; throws rather than return anything else. */
-	public static function read(string $file): string {
-		$manifest = self::manifest();
+	public static function read(string $file, string $dir = self::DIR): string {
+		$manifest = self::manifest($dir);
 		if (!isset($manifest['files'][$file]['sha256'])) {
 			throw new \RuntimeException("blank documents: $file is not in MANIFEST.json");
 		}
-		$bytes = @file_get_contents(self::DIR . '/' . $file);
+		$bytes = @file_get_contents($dir . '/' . $file);
 		if ($bytes === false || $bytes === '') {
 			throw new \RuntimeException("blank documents: $file is missing or empty");
 		}

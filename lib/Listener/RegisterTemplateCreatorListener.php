@@ -13,16 +13,19 @@ use OCP\IL10N;
 
 /**
  * "+ New -> New document" in Files (study_LiteCore specs/SPEC-M3-new-document.md
- * section 3.1). Text documents only, and only the .odt mimetype: the picker then
- * offers "Blank" plus the user's own .odt files from their Templates folder,
- * never an .ott (core would copy an .ott's bytes into the .odt as they are).
+ * section 3.1). Only the .odt mimetype: the picker then offers "Blank" plus the
+ * user's own .odt files from their Templates folder, never an .ott (core would
+ * copy an .ott's bytes into the .odt as they are).
+ *
+ * "+ New -> New spreadsheet" the same way (specs/SPEC-P-demo-batch-6.md 1.1),
+ * registered as richdocuments registers its own, .ods only. Both icons are
+ * LibreOffice's document icons, img/README.md.
  *
  * @template-implements IEventListener<Event|RegisterTemplateCreatorEvent>
  */
 class RegisterTemplateCreatorListener implements IEventListener {
 	private const ODT = 'application/vnd.oasis.opendocument.text';
-	// The same glyph as the Files action in src/files.js.
-	private const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zm-1 7V3.5L18.5 9zM7 13h10v2H7zm0 4h7v2H7z"/></svg>';
+	private const ODS = 'application/vnd.oasis.opendocument.spreadsheet';
 
 	public function __construct(
 		private IL10N $l10n,
@@ -33,12 +36,29 @@ class RegisterTemplateCreatorListener implements IEventListener {
 		if (!$event instanceof RegisterTemplateCreatorEvent) {
 			return;
 		}
-		$event->getTemplateManager()->registerTemplateFileCreator(function (): TemplateFileCreator {
+		$manager = $event->getTemplateManager();
+		$manager->registerTemplateFileCreator(function (): TemplateFileCreator {
 			$creator = new TemplateFileCreator(Application::APP_ID, $this->l10n->t('New document'), '.odt');
 			$creator->addMimetype(self::ODT);
-			$creator->setIconSvgInline(self::ICON);
+			$creator->setIconSvgInline(self::icon('oasis-text.svg'));
 			$creator->setRatio(21 / 29.7);
 			return $creator;
 		});
+		$manager->registerTemplateFileCreator(function (): TemplateFileCreator {
+			$creator = new TemplateFileCreator(Application::APP_ID, $this->l10n->t('New spreadsheet'), '.ods');
+			$creator->addMimetype(self::ODS);
+			$creator->setIconSvgInline(self::icon('oasis-spreadsheet.svg'));
+			$creator->setRatio(16 / 9);
+			return $creator;
+		});
+	}
+
+	/** One of the app's icons, inline; throws rather than register a creator with no icon. */
+	private static function icon(string $name): string {
+		$svg = @file_get_contents(__DIR__ . '/../../img/' . $name);
+		if ($svg === false || $svg === '') {
+			throw new \RuntimeException("LiteCore: img/$name is missing");
+		}
+		return $svg;
 	}
 }
