@@ -34,6 +34,14 @@
  *              that would release the lock.
  *   readOnly -- a file the user may not write is handed to the page with
  *              `readOnly: true` and opens view-only; no lock is taken.
+ *   saveAs() -- a new file in the same folder, never over another
+ *              (If-None-Match: *; 412 is NAME_TAKEN, nothing written). Placed,
+ *              this file's lock is let go and the new file is opened through
+ *              the ordinary route, without asking about leaving (study_LiteCore
+ *              SPEC-P-ms-formats 5.3, 0.2.56). This file stays as last saved.
+ *
+ * Every write is in the file's own format, read from its mime (0.2.56: Word
+ * and Excel files are saved back as Word and Excel).
  *
  * No server-side document processing: the bytes go browser <-> WebDAV.
  * Everything observed is published on <html data-litecore> for a driver.
@@ -41,12 +49,21 @@
 (function () {
 	'use strict'
 
-	const ODT = 'application/vnd.oasis.opendocument.text'
-	const ODS = 'application/vnd.oasis.opendocument.spreadsheet'
+	// study_LiteCore SPEC-P-ms-formats 5.3: what each format is called, carries
+	// and is edited in. The file's own format comes from its mime (the controller
+	// sends it since 0.2.56), not from the page: one page edits ODT and DOCX.
+	const FORMATS = {
+		odt: { mime: 'application/vnd.oasis.opendocument.text', extension: '.odt', page: 'e2-editor.html' },
+		docx: { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', extension: '.docx', page: 'e2-editor.html' },
+		ods: { mime: 'application/vnd.oasis.opendocument.spreadsheet', extension: '.ods', page: 'ods-editor.html' },
+		xlsx: { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', extension: '.xlsx', page: 'ods-editor.html' },
+	}
+	const SUFFIXES = /\.(?:odt|docx|ods|xlsx)$/i
 	function documentFormat() {
-		return config?.page?.name === 'ods-editor.html'
-			? { mime: ODS, extension: '.ods' }
-			: { mime: ODT, extension: '.odt' }
+		const mime = config?.file?.mime
+		const format = Object.keys(FORMATS).find((key) => FORMATS[key].mime === mime)
+			|| (config?.page?.name === 'ods-editor.html' ? 'ods' : 'odt')
+		return { format, ...FORMATS[format] }
 	}
 	const LOCK_SECONDS = 300
 	const REFRESH_MS = 60000
@@ -315,7 +332,14 @@
 		}
 	}
 
+	// A Save As placed its file and this page is leaving for it (saveAs()):
+	// nothing here is the user's last copy any more, so leaving is not asked about.
+	let handingOver = null
 	window.addEventListener('beforeunload', (event) => {
+		if (handingOver) {
+			release('save-as')
+			return
+		}
 		// -- the way out (spec §3 S4-S6): asked about, so the page may stay; keep the lock.
 		// The page's own question counts too; an answer that throws counts as
 		// "yes" -- asking once too often loses nothing, not asking loses edits.
@@ -395,7 +419,7 @@
 		const slash = config.file.davUrl.lastIndexOf('/')
 		const folder = config.file.davUrl.slice(0, slash + 1)
 		const format = documentFormat()
-		const stem = config.file.name.replace(/\.(?:odt|ods)$/i, '')
+		const stem = config.file.name.replace(SUFFIXES, '')
 		const now = new Date()
 		const pad = (n) => String(n).padStart(2, '0')
 		const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
@@ -454,10 +478,12 @@
 
 		// `trigger` and `conditions` come from the page (SPEC-M3-autosave §9.3):
 		// recorded, and the O2 label says （自動） for an autosave.
-		async save(bytes, { name, trigger, conditions } = {}) {
+		async save(bytes, { name, trigger, conditions, format } = {}) {
 			const record = { at: Date.now() - out.started, name, bytes: bytes.byteLength, attempts: [],
 				trigger: trigger === 'auto' ? 'auto' : 'manual', target: target ? target.name : 'original' }
 			if (conditions) record.conditions = conditions
+			// What the page says the bytes are (0.2.56), recorded beside the file's own.
+			if (format !== undefined) Object.assign(record, { format, fileFormat: documentFormat().format })
 			out.saves.push(record)
 			inFlight++
 			try {
@@ -481,6 +507,86 @@
 				publish()
 			}
 		},
+
+		// study_LiteCore SPEC-P-ms-formats 5.3. `name` is the whole file name the
+		// page asks for, `format` what the bytes are: ODF, or this file's own
+		// format (the page offers nothing else, spec 5.2), the suffix matching.
+		async saveAs(bytes, { name, format } = {}) {
+			const record = { at: Date.now() - out.started, name, format, bytes: bytes.byteLength }
+			out.saveAs = (out.saveAs || []).concat(record)
+			publish()
+			const own = documentFormat()
+			const odf = own.page === 'ods-editor.html' ? 'ods' : 'odt'
+			const wanted = FORMATS[format]
+			if (!wanted || (format !== own.format && format !== odf) || typeof name !== 'string'
+				|| /[\\/]/.test(name) || !name.toLowerCase().endsWith(wanted.extension) || name.length <= wanted.extension.length) {
+				record.outcome = 'refused'
+				publish()
+				throw failure('INVALID_ARGUMENT', '另存新檔的檔名或格式不對，沒有存。')
+			}
+			if (!config.file.writable) {
+				record.outcome = 'read-only'
+				publish()
+				throw failure('READ_ONLY', '唯讀的檔案不能另存新檔。')
+			}
+			const folder = config.file.davUrl.slice(0, config.file.davUrl.lastIndexOf('/') + 1)
+			const url = folder + encodeURIComponent(name)
+			inFlight++
+			try {
+				const response = await send(url, {
+					method: 'PUT', body: bytes, headers: headers({ 'Content-Type': wanted.mime, 'If-None-Match': '*' }),
+				})
+				record.status = response.status
+				record.respondedAt = Date.now() - out.started
+				if (response.status === 412) {
+					record.outcome = 'name-taken'
+					throw failure('NAME_TAKEN', `這個資料夾已經有「${name}」，沒有覆寫。`)
+				}
+				if (!response.ok) {
+					record.outcome = 'failed'
+					throw failure('HOST_SAVE_AS_FAILED', `另存新檔失敗（${response.status}）：原檔沒有變動。`)
+				}
+				// OC-FileId is the id, zero-padded, then the instance id.
+				let fileId = parseInt(response.headers.get('oc-fileid') || '', 10)
+				record.fileIdFrom = 'OC-FileId'
+				if (!(fileId > 0)) {
+					fileId = await fileIdOf(url)
+					record.fileIdFrom = 'PROPFIND'
+				}
+				record.fileId = fileId
+				if (!(fileId > 0)) {
+					record.outcome = 'placed-without-id'
+					throw failure('HOST_SAVE_AS_FAILED', `已存成「${name}」，但找不到它的檔案代號：請從檔案清單開啟它。`)
+				}
+				record.outcome = 'placed'
+				// The same build address, the new file's page and id: the ordinary
+				// open path takes it from here (lock, title, later saves).
+				const next = new URL(location.href)
+				next.pathname = next.pathname.replace(/[^/]*$/, wanted.page)
+				next.search = `?fileId=${fileId}`
+				next.hash = ''
+				handingOver = { to: next.href, at: Date.now() - out.started }
+				out.handingOver = handingOver
+				release('save-as')
+				publish()
+				// A moment for the page to say where the copy went.
+				setTimeout(() => location.assign(next.href), 400)
+				return { name, fileId }
+			} finally {
+				inFlight--
+				record.settled = true
+				publish()
+			}
+		},
+	}
+
+	async function fileIdOf(url) {
+		const body = '<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:prop><oc:fileid/></d:prop></d:propfind>'
+		const response = await send(url, { method: 'PROPFIND', body, headers: headers({ Depth: '0', 'Content-Type': 'application/xml; charset=utf-8' }) })
+		if (!response.ok) return null
+		const text = await response.text()
+		const match = /<oc:fileid>(\d+)<\/oc:fileid>/.exec(text)
+		return match ? parseInt(match[1], 10) : null
 	}
 
 	// -- two writes in one second (study_LiteCore findings 103, 104)

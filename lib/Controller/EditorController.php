@@ -56,22 +56,26 @@ use OCP\Util;
 class EditorController extends Controller {
 	private const ODT = 'application/vnd.oasis.opendocument.text';
 	private const ODS = 'application/vnd.oasis.opendocument.spreadsheet';
+	private const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+	private const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 	private const ENGINE_SCHEMA = 'litecore-engine/3';
 	/**
 	 * The page table (SPEC-M4 §3.4): per shipped page, the one module script it
 	 * carries (removed from the re-wrapped body and imported by the host script
 	 * instead -- that script carries Nextcloud's CSP nonce, so strict-dynamic
-	 * admits the module graph it loads), the ONE mime its route resolves, its
-	 * template and its host script. A file of the other mime is refused on the
+	 * admits the module graph it loads), the mimes its route resolves, its
+	 * template and its host script. A file of another mime is refused on the
 	 * wrong route: the viewer never shows a text document as sheets, the editor
-	 * never opens a spreadsheet.
+	 * never opens a spreadsheet. Since 0.2.56 the two editors also take Word and
+	 * Excel files, saved back in their own format (study_LiteCore
+	 * specs/SPEC-P-ms-formats.md 5.3); the viewer's engine reads ODS only.
 	 */
 	private const PAGES = [
-		'e2-editor.html' => ['module' => './e2-editor-app.js', 'mime' => self::ODT, 'kind' => 'ODT',
+		'e2-editor.html' => ['module' => './e2-editor-app.js', 'mimes' => [self::ODT, self::DOCX], 'kind' => 'ODT or DOCX',
 			'template' => 'editor', 'hostScript' => 'litecore-editor'],
-		'ods-viewer.html' => ['module' => './ods-viewer-app.js', 'mime' => self::ODS, 'kind' => 'ODS',
+		'ods-viewer.html' => ['module' => './ods-viewer-app.js', 'mimes' => [self::ODS], 'kind' => 'ODS',
 			'template' => 'viewer', 'hostScript' => 'litecore-viewer'],
-		'ods-editor.html' => ['module' => './ods-editor-app.js', 'mime' => self::ODS, 'kind' => 'ODS',
+		'ods-editor.html' => ['module' => './ods-editor-app.js', 'mimes' => [self::ODS, self::XLSX], 'kind' => 'ODS or XLSX',
 			'template' => 'editor', 'hostScript' => 'litecore-editor'],
 	];
 
@@ -168,13 +172,15 @@ class EditorController extends Controller {
 	/** The page document: the shipped page re-wrapped under Nextcloud's header. */
 	private function page(string $name, int $fileId, array $engine): Response {
 		$page = self::PAGES[$name];
-		$target = $this->resolve($fileId, $page['mime'], $page['kind']);
+		$target = $this->resolve($fileId, $page['mimes'], $page['kind']);
 		if (is_string($target)) {
 			return new DataDisplayResponse($target, Http::STATUS_NOT_FOUND, ['Content-Type' => 'text/plain; charset=utf-8']);
 		}
 		// Files can advertise UPDATE on a shared mount although its file is read-only.
 		// The resolved server-side permission decides which spreadsheet page to serve.
-		if ($name === 'ods-editor.html' && !$target['writable']) {
+		// An ODS only: the viewer's engine does not read XLSX, so a read-only XLSX
+		// stays here and opens view-only (`load()` hands the page `readOnly`).
+		if ($name === 'ods-editor.html' && !$target['writable'] && $target['mime'] === self::ODS) {
 			return new RedirectResponse($this->pageUrl($engine, 'ods-viewer.html', $fileId));
 		}
 		$html = (string)gzdecode((string)file_get_contents($this->packed($name, '.gz')));
@@ -263,15 +269,18 @@ class EditorController extends Controller {
 	/**
 	 * The file as the current user sees it, or why not. Only the user's own
 	 * folder: shares received are in it, public links are not (out of scope).
-	 * Only the page's own mime: the editor route resolves ODT, the viewer route ODS.
+	 * Only the page's own mimes: the editor route resolves ODT and DOCX, the
+	 * spreadsheet editor ODS and XLSX, the viewer ODS. `mime` goes to the host
+	 * script, which writes the file back in it (0.2.56).
 	 *
 	 * `writable` decides whether the editor's host takes a lock at all: a
 	 * read-only share answers every PUT with 403, so there is nothing a lock
 	 * would protect. The viewer's host never takes one.
 	 *
-	 * @return array{id: int, name: string, dir: string, size: int, etag: string, writable: bool, davUrl: string}|string
+	 * @param list<string> $mimes
+	 * @return array{id: int, name: string, mime: string, dir: string, size: int, etag: string, writable: bool, davUrl: string}|string
 	 */
-	private function resolve(int $fileId, string $mime, string $kind): array|string {
+	private function resolve(int $fileId, array $mimes, string $kind): array|string {
 		$user = $this->userSession->getUser();
 		if ($user === null || $fileId <= 0) {
 			return 'no such file';
@@ -281,7 +290,7 @@ class EditorController extends Controller {
 		if (!$node instanceof File || !$node->isReadable()) {
 			return 'no such file';
 		}
-		if ($node->getMimetype() !== $mime) {
+		if (!in_array($node->getMimetype(), $mimes, true)) {
 			return 'not an ' . $kind . ' file';
 		}
 		$relative = (string)$folder->getRelativePath($node->getPath());
@@ -290,6 +299,7 @@ class EditorController extends Controller {
 		return [
 			'id' => $node->getId(),
 			'name' => $node->getName(),
+			'mime' => $node->getMimetype(),
 			'dir' => $dir === '.' || $dir === '\\' ? '/' : $dir,
 			'size' => $node->getSize(),
 			'etag' => $node->getEtag(),
